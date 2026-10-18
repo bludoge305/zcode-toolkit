@@ -1,7 +1,7 @@
 # zcode-tokenspeed · ZCode 客户端一站式原生增强套件
 
 <p align="left">
-  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.20-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.21-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -164,7 +164,7 @@ run.cmd                        # Windows
 - **看护空任务守卫**：`apply_after_exit.py` 严格过滤 `reasoning_config=off` 任务；若最终无待执行补丁任务，看护直接安全退出，杜绝空任务挂起等待与退出自动重启 ZCode。
 - **全平台兼容吸收**：完整吸纳 PR #4 对 macOS 看护链路的跨平台支持与 crashpad 僵尸进程排除。
 
-#### 0.6.20（支持 ZCodium 发行版：修好「装了但完全没反应」）
+#### 0.6.21（支持 ZCodium 发行版：修好「装了但完全没反应」）
 - **客户端身份识别层**：新增 `DATA_DIR_NAMES = (".zcode", ".zcodium")` 与 `PROCESS_NAMES = ("ZCode.exe", "ZCodium.exe")`，安装探测、运行守卫、数据根解析全部改走统一的 `_is_client_name()`。此前三处都硬编码原版 ZCode 特征，而 `"zcode" in "zcodium"` 恰好不成立，导致三个探测器在 ZCodium 上全部命中 0 个候选目录，脚本直接报「未找到 app.asar」——界面上表现得就像什么都没装；
 - **运行守卫补全**：`zcode_running()` 同时识别两个进程名。原先只查 `ZCode.exe` 会让 ZCodium 用户绕过预检、在客户端运行时重打包 asar；
 - **注入代码运行时选目录**：四个 IPC handler（模型读写 / 增强润色 / 润色模型保存）不再写死 `~/.zcode/v2`，改为按实际存在的 `~/.zcode` 或 `~/.zcodium` 选择，并把 `setting.json` 的 `dataBaseDir` 一并纳入；
