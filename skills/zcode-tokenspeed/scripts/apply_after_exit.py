@@ -101,13 +101,16 @@ def zcode_running() -> bool:
 
 
 def _find_exe(res: Path) -> Path | None:
-    """从 asar 所在目录（<安装根>/resources）推出各平台的 ZCode 主程序路径。"""
-    root = res.parent                       # Windows: 安装根；macOS: ZCode.app/Contents
-    cands: list[Path] = [root / "ZCode.exe"]            # Windows
+    """从 asar 所在目录（<安装根>/resources）推出各平台的客户端主程序路径。
+
+    Windows 上同时支持原版 ZCode.exe 与 ZCodium 发行版的 ZCodium.exe。
+    """
+    root = res.parent                       # Windows: 安装根；macOS: Contents
+    cands: list[Path] = [root / "ZCode.exe", root / "ZCodium.exe"]   # Windows（两版发行）
     if sys.platform == "darwin":
-        cands.insert(0, root / "MacOS" / "ZCode")       # macOS .app 包
+        cands = [root / "MacOS" / "ZCode", root / "MacOS" / "ZCodium"] + cands
     else:
-        cands += [root / "zcode", root / "ZCode"]       # Linux 常见命名
+        cands += [root / "zcode", root / "ZCode", root / "zcodium", root / "ZCodium"]
     for c in cands:
         if c.is_file():
             return c

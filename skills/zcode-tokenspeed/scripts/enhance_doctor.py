@@ -58,23 +58,26 @@ TIMEOUT = 60000
 
 
 def resolve_root() -> tuple[Path, str]:
-    """复刻 handler：先读 <home>/.zcode/v2/setting.json 的 dataBaseDir，否则用默认。"""
+    """复刻 handler：按实际存在的发行版数据目录（~/.zcode 或 ~/.zcodium）解析 v2 根。"""
     home = Path(os.path.expanduser("~"))
-    base = home
-    how = "默认 (~/.zcode/v2)"
-    sfile = home / ".zcode" / "v2" / "setting.json"
-    try:
-        s = json.loads(sfile.read_text(encoding="utf-8"))
-        if isinstance(s, dict):
-            dbd = s.get("dataBaseDir")
-            if isinstance(dbd, str) and dbd.strip():
-                base = Path(dbd.strip())
-                how = f"setting.json dataBaseDir = {base}"
-    except FileNotFoundError:
-        how += "（没有 setting.json，正常）"
-    except Exception as e:
-        how += f"（setting.json 读取失败 {e!r}，已退回默认）"
-    return base / ".zcode" / "v2", how
+    for name in (".zcode", ".zcodium"):
+        cand = home / name / "v2"
+        sfile = cand / "setting.json"
+        try:
+            s = json.loads(sfile.read_text(encoding="utf-8"))
+            if isinstance(s, dict):
+                dbd = s.get("dataBaseDir")
+                if isinstance(dbd, str) and dbd.strip():
+                    alt = Path(dbd.strip()) / name / "v2"
+                    if alt.is_dir():
+                        return alt, f"setting.json dataBaseDir = {alt.parent}"
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+        if cand.is_dir():
+            return cand, f"默认 (~/{name}/v2)"
+    return home / ".zcode" / "v2", "默认 (~/.zcode/v2)"
 
 
 def _read_json(p: Path):

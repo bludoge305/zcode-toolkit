@@ -42,7 +42,20 @@ except ImportError:                    # 被别处 import 时脚本目录可能�
 HERE = Path(__file__).resolve().parent
 PATCHER = HERE / "zcode_patcher.py"
 WATCHDOG = HERE / "apply_after_exit.py"
-CONFIG = Path.home() / ".zcode" / "cli" / "config.json"
+
+
+def _find_cli_config() -> Path:
+    """定位宿主 CLI 配置：原版 ZCode 在 ~/.zcode/cli/config.json，
+    ZCodium 在 ~/.zcodium/cli/config.json。按存在与否选，都不在时退回原版路径。"""
+    home = Path.home()
+    for name in (".zcode", ".zcodium"):
+        p = home / name / "cli" / "config.json"
+        if p.is_file():
+            return p
+    return home / ".zcode" / "cli" / "config.json"
+
+
+CONFIG = _find_cli_config()
 # 插件 id 会随安装方式变化（本地 dev-default-xxxx、市场安装的 id 等），
 # 因此按前缀匹配而不是写死某个 id —— 换台机器/换安装方式也能正确定位配置。
 PLUGIN_ID_PREFIX = "zcode-tokenspeed"

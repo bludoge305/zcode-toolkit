@@ -133,6 +133,43 @@ except ImportError:                    # 被别处 import 时脚本目录可能�
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from _console import bad_mark, no_window_kwargs, ok_mark, safe_stdio
 
+# ---------------------------------------------------------------- 客户端身份
+# 本工具同时支持两个 Electron 客户端发行版：
+#   ZCode  —— 上游原版，进程 ZCode.exe / 数据目录 ~/.zcode
+#   ZCodium—— 定制发行版，进程 ZCodium.exe / 数据目录 ~/.zcodium
+# 两者的 resources 布局、asar 结构、注入锚点完全一致，差异只在「进程名 + 数据目录名」。
+# 早期实现把 ZCode 写死在各处（"zcode" in name 对 "zcodium" 恰好不成立），于是在
+# ZCodium 上三个探测器全部命中 0 个候选目录，表现为「插件装了但什么也没发生」。
+#
+# 统一约定：所有身份相关判定都走下面这层，不要在别处再写死 ".zcode" / "ZCode.exe"。
+DATA_DIR_NAMES = (".zcode", ".zcodium")
+PROCESS_NAMES = ("ZCode.exe", "ZCodium.exe")
+
+
+def data_dir_names() -> tuple[str, ...]:
+    """客户端数据目录名候选（按优先级）。"""
+    return DATA_DIR_NAMES
+
+
+def process_names() -> tuple[str, ...]:
+    """客户端进程名候选（Windows tasklist 里出现的名字）。"""
+    return PROCESS_NAMES
+
+
+def _is_client_name(name: str) -> bool:
+    """目录名/进程名/注册表显示名是否属于本工具支持的客户端（大小写不敏感）。
+
+    只做「归一化后精确相等」，不做子串包含：`zcode-toolkit`、`zcode-data-backup`
+    这类同前缀目录不能被当成客户端安装目录（否则探测会命中无关路径）。
+    """
+    def _key(s: str) -> str:
+        return _norm(s).lstrip(".")
+    n = _key(name)
+    if n.endswith(".exe"):
+        n = n[:-4]
+    return n in {_key(x) for x in DATA_DIR_NAMES} | {_key(Path(p).stem) for p in PROCESS_NAMES}
+
+
 # 全部补丁的命令行参数名：--all 会一次性把它们打开（新增补丁时只需加进这里）
 ALL_PATCH_FLAGS = (
     "reasoning_config",   # 3.14+ 档位配置（配置侧原生）
@@ -296,14 +333,20 @@ def _sha256(data: bytes) -> str:
 
 
 def detect_reasoning_mechanism(cjs: Path) -> str:
-    """判定内核的档位机制：'legacy'（≤3.11，需内核补丁）/ 'native'（≥3.14，配置侧下发）/ 'unknown'。"""
+    """判定内核的档位机制：'legacy'（≤3.11，需内核补丁）/ 'native'（≥3.14，配置侧下发）/ 'unknown'。
+
+    判据是「有没有 optionSpecs 这套配置侧机制」，而不是「有没有 defaultVariant 字符串」：
+    3.14+ 内核里 defaultVariant 仍作为 zod schema 的字段名存在（只剩定义、没有解析逻辑），
+    用 `defaultVariant not in data` 判定会把 ZCodium 1.0.2 这类内核误判成 unknown，
+    进而让 `--reasoning-config` 之外的路径以为「结构未知」。
+    """
     try:
         data = cjs.read_bytes()
     except OSError:
         return "unknown"
     if any(data.count(a.encode()) == 1 for a in ANCHORS.values()):
         return "legacy"
-    if b"optionSpecs" in data and b"defaultVariant" not in data:
+    if b"optionSpecs" in data:
         return "native"
     return "unknown"
 
@@ -461,12 +504,13 @@ def _from_running_processes(found: list[Path]) -> None:
         out = out.decode(errors="replace")
     for line in out.splitlines():
         line = line.strip()
-        # ZCode.exe / ZCode Skin Manager 等都指向安装根目录。
+        # ZCode.exe / ZCodium.exe / ZCode Skin Manager 等都指向安装根目录。
         # 存 PureWindowsPath 而非 Path：单测把 os.name 伪造成 "nt"（zp.os 即全局 os
         # 模块单例），此时 Path() 在 macOS/Linux 上会尝试构造 WindowsPath 并抛
         # NotImplementedError；discover() 消费时统一 Path(root) 转回具体路径
         # （真实 Windows 运行时才转换，PureWindowsPath 属性与 WindowsPath 一致）。
-        if line.lower().endswith(".exe") and "zcode" in _norm(PureWindowsPath(line).name):
+        exe = _norm(PureWindowsPath(line).name)
+        if line.lower().endswith(".exe") and any(_norm(p) == exe for p in PROCESS_NAMES):
             found.append(PureWindowsPath(line).parent)
 
 
@@ -493,7 +537,9 @@ def _from_registry(found: list[Path]) -> None:
                                 name = winreg.QueryValueEx(k, "DisplayName")[0]
                             except OSError:
                                 continue
-                            if "zcode" not in _norm(str(name)):
+                            # 注册表里 ZCode / ZCodium 的 DisplayName 都含 "zcode"，
+                            # 但 ZCodium 的名字是 "ZCodium"，用 _is_client_name 统一判定
+                            if not _is_client_name(str(name)):
                                 continue
                             for val in ("InstallLocation", "DisplayIcon", "UninstallString"):
                                 try:
@@ -526,7 +572,7 @@ def _from_common_dirs(found: list[Path]) -> None:
             continue
         try:
             for entry in os.scandir(base):
-                if not entry.is_dir() or "zcode" not in _norm(entry.name):
+                if not entry.is_dir() or not _is_client_name(entry.name):
                     continue
                 if entry.name.endswith(".app"):
                     found.append(Path(entry.path) / "Contents")   # macOS .app 包，资源在 Contents 下
@@ -1229,10 +1275,17 @@ def _models_main_block(ipc_alias: str) -> bytes:
 __H__.handle("zcode:read-model-config",async()=>{
 try{
 let{default:e}=await import("node:fs"),{default:t}=await import("node:path"),{default:n}=await import("node:os");
-let base=n.homedir();
-try{let s=JSON.parse(e.readFileSync(t.join(base,".zcode","v2","setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())base=s.dataBaseDir.trim()}catch(_){}
-let root=t.join(base,".zcode","v2");
+// 数据目录名随发行版而异：原版 ZCode 用 ~/.zcode，ZCodium 用 ~/.zcodium。
+// 运行时按实际存在的那个选，两个客户端都能用（写死任一个都会让另一版读写空文件）。
+let base=n.homedir(),root="";
+for(let dn of [".zcode",".zcodium"]){
+let c=t.join(base,dn,"v2");
+try{
+let s=JSON.parse(e.readFileSync(t.join(c,"setting.json"),"utf-8"));
+if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())c=t.join(s.dataBaseDir.trim(),dn,"v2");
+}catch(_){}
+try{if(e.existsSync(c)){root=c;break}}catch(_){}}
+if(!root)root=t.join(base,".zcode","v2");
 let cfg={provider:{}};
 try{let d=JSON.parse(e.readFileSync(t.join(root,"config.json"),"utf-8"));
 if(d&&typeof d=="object"&&!Array.isArray(d))cfg=d}catch(_){}
@@ -1285,10 +1338,16 @@ __H__.handle("zcode:write-model-config",async(e,t)=>{
 try{
 if(typeof t!="object"||t===null)throw new Error("invalid config payload");
 let{default:n}=await import("node:fs"),{default:r}=await import("node:path"),{default:i}=await import("node:os");
-let base=i.homedir();
-try{let s=JSON.parse(n.readFileSync(r.join(base,".zcode","v2","setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())base=s.dataBaseDir.trim()}catch(_){}
-let root=r.join(base,".zcode","v2");
+// 同 read-model-config：按实际存在的发行版数据目录选根
+let base=i.homedir(),root="";
+for(let dn of [".zcode",".zcodium"]){
+let c=r.join(base,dn,"v2");
+try{
+let s=JSON.parse(n.readFileSync(r.join(c,"setting.json"),"utf-8"));
+if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())c=r.join(s.dataBaseDir.trim(),dn,"v2");
+}catch(_){}
+try{if(n.existsSync(c)){root=c;break}}catch(_){}}
+if(!root)root=r.join(base,".zcode","v2");
 let o=r.join(root,"config.json");
 let pcPath=r.join(root,"provider_config.json");
 let pc={};
@@ -1481,10 +1540,15 @@ let{default:n}=await import("node:fs"),{default:r}=await import("node:path"),{de
 // 注意：主进程 bundle 是 ESM（package.json type=module），**没有 require**——
 // 取 Node 内置模块必须用动态 import（与 zcode:fetch-models-from-url 的写法保持一致）。
 let{default:httpsMod}=await import("node:https"),{default:httpMod}=await import("node:http");
-let base=i.homedir();
-try{let s=JSON.parse(n.readFileSync(r.join(base,".zcode","v2","setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())base=s.dataBaseDir.trim()}catch(_){}
-let root=r.join(base,".zcode","v2");
+let base=i.homedir(),root="";
+for(let dn of [".zcode",".zcodium"]){
+let c=r.join(base,dn,"v2");
+try{
+let s=JSON.parse(n.readFileSync(r.join(c,"setting.json"),"utf-8"));
+if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())c=r.join(s.dataBaseDir.trim(),dn,"v2");
+}catch(_){}
+try{if(n.existsSync(c)){root=c;break}}catch(_){}}
+if(!root)root=r.join(base,".zcode","v2");
 // ============================================================
 // 供应商凭据的唯一权威来源是 provider_config.json（客户端自己就是从这里发请求的）。
 // config.json 里的 provider.options 是**旧格式**：官方设置页现在写 provider_config.json，
@@ -1742,10 +1806,16 @@ _ENHANCE_SAVE_HANDLER = '''
 __H__.handle("zcode:enhance-model-save",async(ev,t)=>{
 try{
 let{default:n}=await import("node:fs"),{default:r}=await import("node:path"),{default:i}=await import("node:os");
-let base=i.homedir();
-try{let s=JSON.parse(n.readFileSync(r.join(base,".zcode","v2","setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())base=s.dataBaseDir.trim()}catch(_){}
-let root=r.join(base,".zcode","v2"),f=r.join(root,"enhance_config.json");
+let base=i.homedir(),root="";
+for(let dn of [".zcode",".zcodium"]){
+let c=r.join(base,dn,"v2");
+try{
+let s=JSON.parse(n.readFileSync(r.join(c,"setting.json"),"utf-8"));
+if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())c=r.join(s.dataBaseDir.trim(),dn,"v2");
+}catch(_){}
+try{if(n.existsSync(c)){root=c;break}}catch(_){}}
+if(!root)root=r.join(base,".zcode","v2");
+let f=r.join(root,"enhance_config.json");
 let cfg={};
 try{cfg=JSON.parse(n.readFileSync(f,"utf-8"))}catch(_){cfg={}}
 if(!cfg||typeof cfg!="object"||Array.isArray(cfg))cfg={};
@@ -2570,19 +2640,41 @@ REASONING_MAP_ANTHROPIC = (
 
 
 def _v2_root(override: str | None = None) -> Path:
-    """配置根目录 <dataBaseDir>/.zcode/v2（dataBaseDir 取自 ~/.zcode/v2/setting.json，
-    与客户端 bootstrap 同逻辑）。"""
+    """配置根目录 <dataBaseDir>/<数据目录名>/v2。
+
+    数据目录名随发行版而异：原版 ZCode 用 ~/.zcode，ZCodium 用 ~/.zcodium。
+    这里**按实际存在的那个**解析（两个都在时优先 .zcode，保持原版行为不变），
+    dataBaseDir 同样取自该目录下的 setting.json（与客户端 bootstrap 同逻辑）。
+    """
     if override:
         return Path(override)
     base = Path.home()
-    try:
-        s = json.loads((base / ".zcode" / "v2" / "setting.json").read_text(encoding="utf-8"))
-        dbd = s.get("dataBaseDir")
-        if isinstance(dbd, str) and dbd.strip():
-            base = Path(dbd.strip())
-    except Exception:
-        pass
-    return base / ".zcode" / "v2"
+    for name in data_dir_names():
+        cand = base / name / "v2"
+        sfile = cand / "setting.json"
+        try:
+            s = json.loads(sfile.read_text(encoding="utf-8"))
+            dbd = s.get("dataBaseDir")
+            if isinstance(dbd, str) and dbd.strip():
+                alt = Path(dbd.strip()) / name / "v2"
+                if alt.is_dir():
+                    return alt
+                return cand
+        except Exception:
+            pass
+        if cand.is_dir():
+            return cand
+    return base / data_dir_names()[0] / "v2"
+
+
+def _is_zcodium_root(v2_root: Path) -> bool:
+    """该配置根是否属于 ZCodium 发行版（数据目录名为 .zcodium）。
+
+    ZCodium 1.0.2 起不再生成 config.json，档位只走 provider_config.json，
+    因此「缺 config.json」在那里是正常状态，不是数据根指错。
+    """
+    parts = {p.lower() for p in v2_root.parts}
+    return ".zcodium" in parts
 
 
 def _desired_levels(entry: dict) -> tuple[list[str], str] | None:
@@ -2614,6 +2706,14 @@ def process_reasoning_config(v2_root: Path, check_only: bool, revert: bool, *,
     bak = pc_path.with_name(pc_path.name + ".reasoning-bak")
 
     if not cfg_path.is_file():
+        # ZCodium 发行版（数据根在 ~/.zcodium）已不再生成 config.json：档位全部由
+        # provider_config.json 的 optionSpecs 承载，没有需要迁移的旧配置。
+        # 这不是故障，按「无需改动」处理；原版 ZCode 缺 config.json 仍必须报错，
+        # 那通常意味着数据根指错了（--v2-root / dataBaseDir 配错）。
+        if _is_zcodium_root(v2_root):
+            print(f"[.] {v2_root}\n    ZCodium 发行版不生成 config.json，"
+                  f"档位直接由 provider_config.json 承载，无需迁移")
+            return True
         print(f"[!] 找不到配置文件 {cfg_path}")
         return False
     try:
@@ -2898,14 +2998,19 @@ def _pgrep_hits_are_alive(pids: "list[str]", cmdline_of=None) -> bool:
 
 
 def zcode_running() -> bool:
-    """ZCode 是否在运行（打补丁前预检：运行中会锁住 app.asar，配置也可能被回写覆盖）。"""
+    """客户端是否在运行（打补丁前预检：运行中会锁住 app.asar，配置也可能被回写覆盖）。
+
+    同时识别 ZCode.exe 与 ZCodium.exe —— 只看前者会让 ZCodium 用户绕过预检，
+    在客户端运行时写 asar（重打包期间被读走会得到半成品）。
+    """
     try:
         if os.name == "nt":
             # 用 bytes 检索：tasklist 输出是 GBK，text=True 会在读线程抛 UnicodeDecodeError
             out = subprocess.run(["tasklist"], capture_output=True, timeout=15,
                                  **no_window_kwargs()).stdout or b""
-            return b"ZCode.exe" in out
-        r = subprocess.run(["pgrep", "-f", "ZCode"], capture_output=True, timeout=10)  # no-window-ok: 只在 POSIX 分支执行
+            return any(p.encode("ascii", "ignore") in out for p in PROCESS_NAMES)
+        r = subprocess.run(["pgrep", "-f", "|".join(Path(p).stem for p in PROCESS_NAMES)],
+                           capture_output=True, timeout=10)  # no-window-ok: 只在 POSIX 分支执行
         if r.returncode != 0:
             return False
         pids = r.stdout.decode(errors="replace").split()

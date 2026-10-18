@@ -89,15 +89,25 @@ def _load_patcher():
 
 
 def _storage_roots() -> list[Path]:
-    """ZCode 数据目录候选（默认 ~/.zcode，config 里 storage.dir 可改写）。"""
-    roots: list[Path] = [Path.home() / ".zcode"]
-    for cand in (Path.home() / ".zcode" / "cli" / "config.json",):
-        cfg = _read_json(cand)
+    """客户端数据目录候选。
+
+    原版 ZCode 用 ~/.zcode，ZCodium 发行版用 ~/.zcodium；两个都列上、按存在与否取舍，
+    这样同一份自检在两个客户端上都能给出结论（只写死 .zcode 时 ZCodium 永远是「未安装」）。
+    """
+    home = Path.home()
+    roots: list[Path] = []
+    for name in (".zcode", ".zcodium"):
+        base = home / name
+        if base.is_dir():
+            roots.append(base)
+        cfg = _read_json(base / "cli" / "config.json")
         d = ((cfg or {}).get("storage") or {}).get("dir") or ""
         if isinstance(d, str) and d.strip():
             p = Path(os.path.expanduser(d.strip()))
             if p not in roots:
                 roots.append(p)
+    if not roots:
+        roots.append(home / ".zcode")
     return roots
 
 
@@ -383,7 +393,8 @@ def check_plugin() -> tuple[bool, list[Path], bool]:
 
     cfgs = _find_configs()
     if not cfgs:
-        print(f"{BAD} 读不到 {Path.home() / '.zcode' / 'cli' / 'config.json'}")
+        hint = " 或 ".join(str(r / "cli" / "config.json") for r in _storage_roots())
+        print(f"{BAD} 读不到客户端 CLI 配置（{hint}）")
         return True, dirs, False
 
     enabled = False
@@ -393,7 +404,7 @@ def check_plugin() -> tuple[bool, list[Path], bool]:
         master = plugins.get("enabled")
         if master is False:
             print(f"{BAD}   plugins.enabled = false —— **插件子系统总开关被关掉了，一切都不生效**")
-            print("       → 把 ~/.zcode/cli/config.json 里 plugins.enabled 改为 true（或删掉该键）")
+            print("       → 把 <数据目录>/cli/config.json 里 plugins.enabled 改为 true（或删掉该键）")
         else:
             print(f"{OK}   plugins.enabled 未关闭（缺省即开启）")
         en = _prefix_entries(cfg, "enabledPlugins")

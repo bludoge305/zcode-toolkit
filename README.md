@@ -1,7 +1,7 @@
 # zcode-tokenspeed · ZCode 客户端一站式原生增强套件
 
 <p align="left">
-  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.19-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.20-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -163,6 +163,14 @@ run.cmd                        # Windows
 - **语义修正为“不托管”**：3.14+ 思考档位配置目标为客户端自带的 `provider_config.json`；当开关关闭时语义明确为“停止托管与同步”，插件不再主动写入，且绝不主动还原该文件，彻底切断“退出还原 → 客户端重启写回 → 再次检测冲突 → 再次看护还原”的无限死循环；
 - **看护空任务守卫**：`apply_after_exit.py` 严格过滤 `reasoning_config=off` 任务；若最终无待执行补丁任务，看护直接安全退出，杜绝空任务挂起等待与退出自动重启 ZCode。
 - **全平台兼容吸收**：完整吸纳 PR #4 对 macOS 看护链路的跨平台支持与 crashpad 僵尸进程排除。
+
+#### 0.6.20（支持 ZCodium 发行版：修好「装了但完全没反应」）
+- **客户端身份识别层**：新增 `DATA_DIR_NAMES = (".zcode", ".zcodium")` 与 `PROCESS_NAMES = ("ZCode.exe", "ZCodium.exe")`，安装探测、运行守卫、数据根解析全部改走统一的 `_is_client_name()`。此前三处都硬编码原版 ZCode 特征，而 `"zcode" in "zcodium"` 恰好不成立，导致三个探测器在 ZCodium 上全部命中 0 个候选目录，脚本直接报「未找到 app.asar」——界面上表现得就像什么都没装；
+- **运行守卫补全**：`zcode_running()` 同时识别两个进程名。原先只查 `ZCode.exe` 会让 ZCodium 用户绕过预检、在客户端运行时重打包 asar；
+- **注入代码运行时选目录**：四个 IPC handler（模型读写 / 增强润色 / 润色模型保存）不再写死 `~/.zcode/v2`，改为按实际存在的 `~/.zcode` 或 `~/.zcodium` 选择，并把 `setting.json` 的 `dataBaseDir` 一并纳入；
+- **档位机制判定收紧**：`detect_reasoning_mechanism()` 改用「有无 `optionSpecs`」判定原生机制，不再依赖 `defaultVariant` 字符串（3.14+ 内核里它仍作为 zod schema 字段存在，会把新内核误判成 `unknown`）；
+- **无 config.json 的发行版**：ZCodium 1.0.2 不生成 `config.json`，档位全由 `provider_config.json` 承载。仅在 `.zcodium` 数据根下按「无需迁移」跳过，原版 ZCode 缺该文件仍照常报错；
+- **验证**：ZCodium 1.0.2 实测 8 项补丁锚点全部命中（`--all --check` 与 `--all --dry-run` 均 8/8），316 项回归测试全绿。
 
 #### 0.6.19（对齐官方开源代码仓库规范与深度全方位优化）
 - **DOM 锚点全面对齐官方 `test-ids` 契约**：根据上游官方开源代码规范（`v3.15.1`，commit `aac4755`），重构模型拉取按钮挂载点（对齐 `[data-testid="model-provider-add-model-button"]`）、提示词增强与思考强度滑条探针（优先对接官方 `[data-testid="v4-model-config"]`），彻底根除基于脆弱文案或坐标扫描的失效隐患；
