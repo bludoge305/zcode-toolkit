@@ -3416,8 +3416,8 @@ def zcode_running() -> bool:
 def main() -> int:
     safe_stdio()          # 输出被重定向时 cp936 会编不出 ✓/✗，先把这条路封死
     ap = argparse.ArgumentParser(
-        description="ZCode 客户端补丁工具：思考档位（3.14+ 配置侧原生 / ≤3.11 内核补丁）+ 用量页去截断 "
-                    "+ TPS 统计栏 + 思考滑条 + 模型拉取按钮（自动探测安装位置）")
+        description="ZCodium / ZCode 客户端补丁工具：思考档位（3.14+ 配置侧原生 / ≤3.11 内核补丁）"
+                    " + 用量页去截断 + TPS 统计栏 + 思考滑条 + 模型拉取按钮（自动探测安装位置）")
     ap.add_argument("target", nargs="?", help="可选：安装根目录或 zcode.cjs 路径；缺省自动探测全部")
     mode_g = ap.add_mutually_exclusive_group()
     mode_g.add_argument("--check", action="store_true", help="只检查状态，不修改")
@@ -3458,10 +3458,11 @@ def main() -> int:
     ap.add_argument("--enhance-src", default=None,
                     help="指定注入的 zcode-enhance-prompt.js 路径（默认用本脚本同目录自带的）")
     ap.add_argument("--display-name", action="store_true",
-                    help="把渲染层的显示名兜底字面量换成 --name 指定的名字（需同时给出 --name）")
+                    help="把渲染层的显示名兜底字面量换成 --name 指定的名字；"
+                         "不给出 --name 时强制写回 ZCodium")
     ap.add_argument("--name", default=None,
                     help=f"配合 --display-name：目标名字（示例：{DEFAULT_DISPLAY_NAME}）。"
-                         f"不给出时保持客户端原有品牌名不变")
+                         f"不给出时强制写回 ZCodium")
     ap.add_argument("--window-id-fix", action="store_true",
                     help="修 ZCodium 1.0.2 的 disposeWindow(browserWindowId) 未定义变量缺陷")
     ap.add_argument("--prune", action="store_true",

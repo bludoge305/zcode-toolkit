@@ -95,7 +95,7 @@ PATCHES = [
 
 #: 参数需要按「开关的当前值」动态拼装的补丁。
 #: display_name 的值就是目标名字：`["--display-name"]` 只是骨架，
-#: 真正执行时要补上 `--name <值>`，否则 process_display_name 收到 name=None 会空转。
+#: 真正执行时要补上 `--name <值>`；空值保留骨架，走无参语义（写回 ZCodium）。
 #: 这条曾经是「setdisplayname 很慢」的根因——看护拿不到名字，只能另写一次性脚本。
 VALUE_ARGS = {
     "display_name": lambda v: ["--display-name", "--name", str(v)],
@@ -106,7 +106,7 @@ def patch_args(key: str, args: list[str], value) -> list[str]:
     """把「开关值」翻译成实际的命令行参数。
 
     纯布尔开关原样返回 args；字符串型开关（display_name）用值拼出 `--name`。
-    值为 False/空 → 原样返回（由调用方走 revert 分支）。
+    值为 False/空 → 原样返回；空值走无参语义（写回 ZCodium），不是 revert。
     """
     build = VALUE_ARGS.get(key)
     if build is None:
@@ -203,8 +203,8 @@ def _coerce(raw):
     """把宿主可能写入的配置值归一。
 
     布尔开关：true/false（字符串也接受）。
-    **字符串型开关**（当前只有 display_name）：值就是目标名字——它既是「开/关」
-    （非空=开、空串=false），又携带参数。这样用户不必再单独提供一个命令行参数，
+    **字符串型开关**（当前只有 display_name）：值就是目标名字——
+    （非空=目标名字、空串=无参语义），同时携带参数。这样用户不必再单独提供一个命令行参数，
     看护也能原样透传。
     """
     out = {}
@@ -218,7 +218,7 @@ def _coerce(raw):
             elif key in STRING_OPTION_KEYS and val.strip():
                 out[key] = val.strip()      # 名字本身
         elif val is None and key in STRING_OPTION_KEYS:
-            out[key] = False                # 显式清空 → 关闭/保持原样
+            out[key] = False                # 显式清空 → 无参语义（写回 ZCodium）
     return out
 
 
@@ -571,8 +571,8 @@ def resolve_wanted() -> tuple[dict, str]:
 def _describe_deferred(key: str, value) -> str:
     """把待办项写成给人看的一句话。
 
-    字符串型开关不能套用「开/关」：display_name 的值是名字，空值表示还原，
-    写成「display_name→关」会让人以为是把功能关掉了。
+    字符串型开关不能套用「开/关」：display_name 的值是名字，空值表示无参语义
+    （写回 ZCodium），写成「display_name→关」会让人以为是把功能关掉了。
     """
     if key in STRING_OPTION_KEYS:
         # 空值 = 无参语义 = 写回 ZCodium（应用，不是还原）
@@ -600,7 +600,7 @@ def run_sync(echo: bool = False) -> str:
             # 不主动写入，绝不主动还原 provider_config.json（客户端会自行写回，还原注定失效且会触发看护无限重启死循环）。
             continue
         # display_name 的 want 是「名字」而不是布尔：非空时拼成
-        # `--display-name --name <名字>`；为空时只带 `--display-name`（= 还原）。
+        # `--display-name --name <名字>`；为空时只带 `--display-name`（= 写回 ZCodium）。
         args = patch_args(key, args, want)
         state = check_state(args)
         if state == "na":

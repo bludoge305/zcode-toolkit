@@ -37,3 +37,14 @@ SOFTWARE.
   （渐变轨道 / 拖尾光斑 / 拖拽增辉 / 最高档呼吸），**代码为本项目自行实现**。
 - 输入框「增强提示词」的交互与提示词要点对齐了 WorkBuddy 的 `input.enhance` 功能，
   提示词模板为本项目自行撰写。
+
+## 3. 上游项目与 fork 归属
+
+- 本仓库是 [`c80361619/zcode-toolkit`](https://github.com/c80361619/zcode-toolkit) 的 fork，
+  对外品牌为 **ZCodium-toolkit**。
+- 上游原始代码、补丁设计与文档的版权归 `c80361619` 所有，按 MIT License 使用；
+  `LICENSE` 原文保留。
+- 本 fork 自 0.6.20 起独立维护 ZCodium 兼容线，新增/修改部分由
+  [`bludoge305`](https://github.com/bludoge305) 维护，同样按 MIT License 发布。
+- 品牌名替换与窗口 ID 修复的原始实现来自同作者的 `ZCodium_username` 项目，
+  已按 MIT License 移植并改走本项目的 asar 探测 / 备份 / 还原链路。

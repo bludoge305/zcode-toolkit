@@ -1,5 +1,5 @@
 ---
-description: 设置 ZCodium 界面左下角显示的名称；不带参数则强制还原为 ZCodium
+description: 设置 ZCodium 界面左下角显示的名称；不带参数则强制写回 ZCodium
 ---
 
 加载本插件自带的 `zcode-tokenspeed` 技能（`${CLAUDE_PLUGIN_ROOT}/skills/zcode-tokenspeed/SKILL.md`；若该变量未展开，就按插件安装目录下的同名路径读取），然后按下述流程修改界面显示名称。
@@ -9,7 +9,7 @@ description: 设置 ZCodium 界面左下角显示的名称；不带参数则强�
 | 命令 | 效果 |
 |---|---|
 | `/zcode-patch-setdisplayname Bludoge` | 把显示名改成 `Bludoge` |
-| `/zcode-patch-setdisplayname` | **强制还原为 `ZCodium`**（写死目标，不依赖原值） |
+| `/zcode-patch-setdisplayname` | **强制写回 `ZCodium`**（写死目标，不依赖原值） |
 
 > 无参 = **强制写回 `ZCodium`**（不是恢复 asar 原值）。
 > asar 原值由发行版决定——本机 ZCodium 1.0.2 实测是 `Bludoge`，
@@ -33,20 +33,20 @@ python "<skill目录>/scripts/zcode_patcher.py" --display-name --name "<名字>"
 - 「已是目标内容」→ 已是该名字，**直接回复用户，结束**。
 - 「待写入」→ 继续第 2 步。
 
-**不带参数（还原）时**：
+**不带参数（写回 ZCodium）时**：
 
 ```bash
 python "<skill目录>/scripts/zcode_patcher.py" --display-name --check
 ```
 
-- 「待还原 N 个文件」→ 当前是改过的名字，需要还原，继续第 2 步。
+- 「待写入（当前值：X）」→ 当前显示名不是 ZCodium，继续第 2 步写回。
 - 「已是目标内容（当前值：ZCodium）」→ 已经是 ZCodium，**直接回复用户，结束**。
 
 任一路径出现「未定位到目标（结构可能已变）」→ 报告即结论，不要手工改 asar。
 
 ### 第 2 步：写入配置（一条命令）
 
-目标是 `~/.zcode/cli/config.json`（ZCodium 是 `~/.zcodium/cli/config.json`）里的
+目标是 `~/.zcodium/cli/config.json`（原版 ZCode 是 `~/.zcode/cli/config.json`）里的
 `plugins.options["zcode-tokenspeed@<市场名>"]`：
 
 **改名**：
@@ -63,7 +63,7 @@ python "<skill目录>/scripts/zcode_patcher.py" --display-name --check
 }
 ```
 
-**还原**：把该键设为空串（或直接删掉这个键）：
+**写回 ZCodium**：把该键设为空串（或直接删掉这个键）：
 
 ```json
 {
@@ -77,13 +77,16 @@ python "<skill目录>/scripts/zcode_patcher.py" --display-name --check
 }
 ```
 
+> 空串 = 无参语义 = 目标固定为 `ZCodium`，**不是**从 sidecar 恢复原值。
+> 要回到打补丁前的原始字节，用第 4 步的 `--display-name --revert`。
+
 **操作要点**：
 
 - **整份读入 → 只改 `display_name` 这一个键 → 写回**，保留其余键与缩进。
 - 值就是名字本身（字符串），不要包成 `{"value": ...}`。
 - 写前先把原文件复制一份 `config.json.bak`。
-- 还原时**不要**手工删 sidecar：原始品牌名就存在 `app.asar.name-patch.json` 里，
-  由脚本自己还原并清理。
+- **不要**手工删 sidecar：原始品牌名就存在 `app.asar.name-patch.json` 里，
+  需要精确撤销时由脚本自己还原并清理。
 
 ### 第 3 步：同步一次，让它排进队列
 
@@ -91,20 +94,21 @@ python "<skill目录>/scripts/zcode_patcher.py" --display-name --check
 python "<skill目录>/scripts/sync.py"
 ```
 
-- ZCode **已完全退出** → 当场写入 app.asar（改名或还原），完成后按第 4 步提示重启。
-- ZCode **正在运行** → sync 会打印「ZCode 退出时写入」，并自动拉起看护；
-  告诉用户「已排期，下次完全退出 ZCode 时自动写入并重启」，**不要说「已完成」**。
+- ZCodium **已完全退出** → 当场写入 app.asar（改名或写回 ZCodium），完成后按第 4 步提示重启。
+- ZCodium **正在运行** → sync 会打印「ZCodium 退出时写入」，并自动拉起看护；
+  告诉用户「已排期，下次完全退出 ZCodium 时自动写入并重启」，**不要说「已完成」**。
 
 ### 第 4 步：回复用户
 
 一条消息说清三件事：
 
-1. **当前状态**：已改名 / 已还原为 ZCodium / 已排期（下次退出时生效）/ 本来就是 ZCodium。
-2. **还原命令**（改名时务必给）：
+1. **当前状态**：已改名 / 已写回 ZCodium / 已排期（下次退出时生效）/ 本来就是 ZCodium。
+2. **精确撤销命令**（改名或写回后想回到打补丁前时给）：
    ```bash
    python "<skill目录>/scripts/zcode_patcher.py" --display-name --revert
    ```
-   等价于无参执行本命令。执行前需完全退出 ZCode。
+   与无参语义不同：无参是**写回 ZCodium**，`--revert` 是从 sidecar 回到**打补丁前的原始字节**。
+   执行前需完全退出 ZCodium。
 3. **名字限制**：1–40 字符，不能含引号、反引号、反斜杠、换行。
 
 ---
@@ -115,7 +119,8 @@ python "<skill目录>/scripts/sync.py"
 - `--check` 会打印当前值（如「待写入（当前值：Bludoge）」），据此向用户说明现状。
 - **参数校验**（写配置前做）：去首尾空白；长度 1–40；不含 `` ` `` `"` `'` `\` 与换行。
   不合法就直接说明原因，不要写入。
-- **不要自己发明命令**：`--display-name` 不带 `--name` 是**还原**语义，不是空操作。
+- **不要自己发明命令**：`--display-name` 不带 `--name` 是**强制写回 ZCodium**语义，不是空操作；
+  从 sidecar 精确撤销用 `--display-name --revert`，两者不要混用。
 - **不要写一次性看护脚本**：配置写入后 `sync.py` 会自动排期，这是既有机制。
 - **不要重复启动看护**：`sync.py` 内部有单例锁，重复启动会直接退出，属正常。
 - 路径坑：Git Bash 的 `/c/Users/...` 传给原生 python 时会被改写，**统一用 `C:\...` 绝对路径**。
