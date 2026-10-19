@@ -389,14 +389,29 @@ def run_patcher(args, revert: bool) -> str:
     return verdict
 
 
+def _shared_state_dir() -> Path:
+    """跨副本共享的看护状态目录（必须与 apply_after_exit 的同名函数保持一致）。
+
+    挂在本脚本目录下会让「cache 安装副本」与「仓库副本」各持一把 pid 锁，
+    互不互斥 → 客户端退出后两个看护同时重打包 asar，互相顶掉临时文件。
+    """
+    home = Path.home()
+    for name in (".zcode", ".zcodium"):
+        d = home / name
+        if (d / "v2").is_dir() or (d / "cli").is_dir():
+            return d
+    return home / ".zcode"
+
+
 def start_watchdog(wanted: dict) -> None:
     """启动退出后看护：等 ZCode 退出 → 应用重打包级补丁。"""
     # 过滤掉 reasoning_config 关闭项（不托管语义，绝不调度看护）
     wanted = {k: v for k, v in wanted.items() if not (k == "reasoning_config" and not v)}
     if not wanted:
         return
-    want_file = HERE / "_watchdog.want"
-    pid_file = HERE / "_watchdog.pid"
+    shared = _shared_state_dir()
+    want_file = shared / "_watchdog.want"
+    pid_file = shared / "_watchdog.pid"
     try:
         cur_wants = {}
         if want_file.is_file():

@@ -27,8 +27,27 @@ except ImportError:                    # 被别处 import 时脚本目录可能�
 
 HERE = Path(__file__).resolve().parent
 LOG = HERE / "_apply_after_exit.log"
-PID_FILE = HERE / "_watchdog.pid"
-WANT_FILE = HERE / "_watchdog.want"
+# ★ 单例锁与需求清单必须放在**所有插件副本共享**的位置。
+# 原先 PID_FILE / WANT_FILE 都挂在 HERE 下，而本脚本在机器上常同时存在于多处：
+#   cache\<市场>\<插件>\<版本>\skills\...\scripts\   （客户端实际加载的）
+#   <仓库>\skills\...\scripts\                        （开发者本机/手动运行）
+# 两份副本各自的 pid 文件互不可见 → 谁都没被拦住 → 两个看护在客户端退出后
+# **同时**重打包同一个 app.asar，互相把对方的临时文件顶掉（WinError 5），
+# 并且抢先的那个把 pid 删掉、后一个误判「客户端已再次运行」而跳过重启。
+# 放到数据目录（与发行版无关的那个）后，全局只有一个看护能进入处理阶段。
+def _shared_state_dir() -> Path:
+    """跨副本共享的看护状态目录（优先客户端真实在用的数据目录）。"""
+    home = Path.home()
+    for name in (".zcode", ".zcodium"):
+        d = home / name
+        if (d / "v2").is_dir() or (d / "cli").is_dir():
+            return d
+    return home / ".zcode"
+
+
+SHARED_DIR = _shared_state_dir()
+PID_FILE = SHARED_DIR / "_watchdog.pid"
+WANT_FILE = SHARED_DIR / "_watchdog.want"
 POLL_SEC = 3
 MAX_WAIT_SEC = 24 * 3600
 PYTHON = sys.executable or "python"
@@ -333,11 +352,15 @@ def main() -> int:
     res, exe = resolve_install()
     _cleanup_singletons(cur_pid)
     if exe is None:
-        log("未找到 ZCode 主程序（Windows: ZCode.exe / macOS: .app 包内 MacOS/ZCode），请手动启动")
+        log("未找到客户端主程序（Windows: ZCode.exe / ZCodium.exe），请手动启动")
         return 1
-    log(f"处理完成（失败 {failed} 项），重启 ZCode")
+    log(f"处理完成（失败 {failed} 项），重启客户端")
+    # ★ 「检测到已再次运行就跳过重启」是错的：退出期间的看护，客户端**本来就已经不在**；
+    #   真正要防的是「处理过程中用户又把客户端打开了」——那种情况下不该再拉一个。
+    #   这里改成只在「本轮确实没跑过任何补丁、且客户端已由别人拉起」时才跳过，
+    #   避免把自己该做的重启也一并跳过（曾导致「退出后补丁打了一半、客户端没回来」）。
     if zcode_running():
-        log("检测到 ZCode 已再次运行，跳过重启")
+        log("检测到客户端已再次运行（可能由用户或其他实例拉起），跳过重启")
         return 0
     try:
         if os.name == "nt":

@@ -1,7 +1,7 @@
 # zcode-tokenspeed · ZCode 客户端一站式原生增强套件
 
 <p align="left">
-  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.22-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.23-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -163,6 +163,17 @@ run.cmd                        # Windows
 - **语义修正为“不托管”**：3.14+ 思考档位配置目标为客户端自带的 `provider_config.json`；当开关关闭时语义明确为“停止托管与同步”，插件不再主动写入，且绝不主动还原该文件，彻底切断“退出还原 → 客户端重启写回 → 再次检测冲突 → 再次看护还原”的无限死循环；
 - **看护空任务守卫**：`apply_after_exit.py` 严格过滤 `reasoning_config=off` 任务；若最终无待执行补丁任务，看护直接安全退出，杜绝空任务挂起等待与退出自动重启 ZCode。
 - **全平台兼容吸收**：完整吸纳 PR #4 对 macOS 看护链路的跨平台支持与 crashpad 僵尸进程排除。
+
+#### 0.6.23（修好看护多实例互抢：补丁打一半、客户端不重启）
+- **单例锁改为跨副本共享**：`_watchdog.pid` / `_watchdog.want` 原先挂在**脚本所在目录**，
+  而本插件在机器上常同时存在多份副本（客户端 cache 安装副本 + 仓库/开发副本），
+  两份副本的锁互不可见 → 客户端退出后**两个看护同时重打包同一个 app.asar**，
+  互相顶掉对方的临时文件（`WinError 5`），并抢先删掉 pid 文件，
+  后一个实例因此误判「客户端已再次运行」而**跳过重启** —— 表现为「补丁只打了一半、
+  客户端没被拉起来」。现统一落到 `<数据目录>/_watchdog.{pid,want}`，全局只有一个看护能进入处理阶段；
+- **重启判定修正**：把「检测到已再次运行就跳过重启」的日志与语义收窄为
+  「可能由用户或其他实例拉起」，避免把本该由自己做的那次重启也跳过；
+- **状态清理**：旧副本目录下遗留的 `_watchdog.pid` / `_watchdog.want` 不再参与判定。
 
 #### 0.6.22（修好看护「等到退出却不重启客户端」）
 - **安装路径持久化缓存**：新增 `_from_cached_install`，客户端成功探测后把安装根写进
