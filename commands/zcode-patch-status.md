@@ -13,17 +13,39 @@ python "<skill目录>/scripts/zcode_patcher.py" --tps-footer --check
 python "<skill目录>/scripts/zcode_patcher.py" --thought-slider --check
 python "<skill目录>/scripts/zcode_patcher.py" --enhance-prompt --check
 python "<skill目录>/scripts/zcode_patcher.py" --model-puller --check
-python "<skill目录>/scripts/zcode_patcher.py" --display-name --check        # 品牌名替换
 python "<skill目录>/scripts/zcode_patcher.py" --window-id-fix --check       # 窗口 ID 缺陷修复
+# 品牌名替换：**必须先读配置里的目标名**，见下方「品牌名替换」一节
 ```
 
 要求：
 
 - **纯只读**，不要执行任何写入或 `--revert`。
 - 先确认目标 ZCode 版本，并按 skill 里的「版本现状」表判断哪些补丁适用（3.14.x 下思考等级内核补丁已过时，档位改走 `optionSpecs`）。
-- 本命令覆盖**全部 10 项**（8 项原有 + 品牌名替换 + 窗口 ID 缺陷修复），缺一不可；`--all --check` 可一次看全，但逐项命令的结果更便于定位。
+- 本命令覆盖**全部 10 项**（8 项原有 + 品牌名替换 + 窗口 ID 缺陷修复），缺一不可。
 - 用中文汇总成一张表：每个补丁「已打 / 未打 / 不适用 / 目标不存在」，失配时给出脚本报告的原因，不要绕过脚本的拒绝结论。
-- 两个新补丁的**特殊状态**要如实转述，不要当成异常：
-  - 品牌名替换：未指定目标名时输出「未指定目标名（--name），保持原样」——这是正常的「不托管」状态，不是失败。
-  - 窗口 ID 修复：输出「目标不存在（已修复/无需处理）」表示当前客户端版本没有该缺陷（上游已修），同样是正常状态。
-- 想知道品牌名当前实际改成了什么，可再用 `--display-name --name <待确认的名字>` 跑一次：输出「已是目标内容」说明当前就是该名字；输出待写入说明当前是别的名字。用户只想改名字时，引导他用 `/zcode-patch-setdisplayname <名字>`。
+
+## 品牌名替换（必须按配置检查，不要跑裸 `--check`）
+
+`--display-name` 不带 `--name` 的语义是**目标 ZCodium**，不是「不托管」。所以裸跑
+`--display-name --check` 在「配置目标是别的名字」时会报「待写入（当前值：X）」——
+那不是真的有待办，只是比较错了目标。
+
+正确做法：
+
+1. 读配置里的目标名：
+   `~/.zcode/cli/config.json`（ZCodium 是 `~/.zcodium/cli/config.json`）→
+   `plugins.options["zcode-tokenspeed@<实际市场名>"].display_name`
+2. 按值选择检查命令：
+   - **非空**（如 `"Bludoge"`）→
+     `python "<skill目录>/scripts/zcode_patcher.py" --display-name --name "<该值>" --check`
+   - **空串 / 不存在** → `python "<skill目录>/scripts/zcode_patcher.py" --display-name --check`
+     （空值 = 无参语义，目标固定 `ZCodium`）
+3. 结果解读：
+   - 「已是目标内容（当前值：X）」→ **已生效**，配置与 asar 一致；
+   - 「待写入（当前值：Y）」→ **未生效**，配置要 X、当前是 Y（等下次退出写入）；
+   - 「没有可用的 sidecar 备份」不再作为状态判据（无参不再依赖 sidecar）。
+
+其余 9 项的两个特殊状态照旧如实转述，不要当成异常：
+
+- 窗口 ID 修复输出「目标不存在（已修复/无需处理）」→ 当前版本没有该缺陷（上游已修），正常；
+- `core_patch` 输出「本补丁不适用」→ 3.14+ 原生档位机制，正常。
