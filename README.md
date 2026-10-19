@@ -1,7 +1,7 @@
 # zcode-tokenspeed · ZCode 客户端一站式原生增强套件
 
 <p align="left">
-  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.27-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.30-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -166,7 +166,7 @@ run.cmd                        # Windows
 - **看护空任务守卫**：`apply_after_exit.py` 严格过滤 `reasoning_config=off` 任务；若最终无待执行补丁任务，看护直接安全退出，杜绝空任务挂起等待与退出自动重启 ZCode。
 - **全平台兼容吸收**：完整吸纳 PR #4 对 macOS 看护链路的跨平台支持与 crashpad 僵尸进程排除。
 
-#### 0.6.27（命令补齐新功能，新增 `/zcode-patch-setdisplayname`）
+#### 0.6.30（命令补齐新功能，新增 `/zcode-patch-setdisplayname`）
 - **`/zcode-patch-status` 补上遗漏**：原先只检查 8 项，新增的品牌名替换与窗口 ID 修复
   完全没覆盖。现扩充到 **10 项**，并说明这两个补丁的特殊状态（「保持原样」「目标不存在」
   都是正常的非失败状态），不再让用户误以为漏检；
