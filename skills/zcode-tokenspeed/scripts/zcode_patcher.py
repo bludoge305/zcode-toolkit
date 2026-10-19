@@ -1113,10 +1113,11 @@ def process_display_name(asar: Path, check_only: bool, revert: bool, *,
     改名是用户的个性化选择，不该在没人要求时发生。
     """
     # 未指定目标名：这是一种「保持原样」的合法状态，不产生任何改动。
-    # 还原/检查模式仍要照常走（它们不需要 name；还原读 sidecar 原文）。
-    if name is None:
+    # 还原模式仍要照常走（它读 sidecar 原文，不需要 name）。
+    unnamed = name is None
+    if unnamed:
         if revert:
-            name = b""                      # 占位，revert 分支不会用到
+            name = ""                       # 占位；revert 分支不会调用 make_replacement
         else:
             print(f"    [=] {_short(asar)} | 品牌名替换: 未指定目标名（--name），保持原样")
             return True
@@ -1129,7 +1130,8 @@ def process_display_name(asar: Path, check_only: bool, revert: bool, *,
 
     return _process_asar_text_patch(
         asar, check_only, revert,
-        label=("品牌名替换（还原）" if revert and name is None
+        # 还原时不要显示「→ 名字」：那个名字对还原没有意义（原文来自 sidecar）
+        label=("品牌名替换（还原）" if revert
                else f"品牌名替换 → {name}"),
         side_suffix=".name-patch.json",
         find_spans=find, make_replacement=repl, dry_run=dry_run)
