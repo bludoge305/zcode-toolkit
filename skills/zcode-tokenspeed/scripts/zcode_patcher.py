@@ -179,7 +179,42 @@ ALL_PATCH_FLAGS = (
     "thought_slider",
     "model_puller",
     "enhance_prompt",
+    "display_name",       # 品牌兜底名替换（ZCodium → 自定义）
+    "window_id_fix",      # disposeWindow(browserWindowId) 缺陷修复
 )
+
+
+# ---------------------------------------------------------------- 品牌名替换
+# 来自 ZCodium_username 项目（MIT，同一作者），移植进本框架后共用 asar 探测、
+# 重打包、备份指纹、sidecar 与还原链路。
+#
+# 目标：渲染层里「显示名兜底」的字符串字面量，典型形态
+#   e?.displayName?.trim() || e?.username?.trim() || `ZCodium`
+# 把最后的 `ZCodium` 换成用户指定的名字。写成写死的偏移必然随版本失效，
+# 因此按**表达式上下文**定位，并准备多级兜底（压缩器可能重排或拆分表达式）。
+DEFAULT_DISPLAY_NAME = "Bludoge"
+DEFAULT_BRANDS = ("ZCodium", "ZCode", "ZCode Desktop")
+SCRIPT_EXTS = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".html", ".htm"}
+
+# 主特征：displayName 兜底到 username，再兜底到字面量。
+RE_NAME_PRIMARY = re.compile(
+    rb"displayName\s*(?:\?\.\s*trim\s*\(\s*\))?\s*(?:\|\||\?\?)\s*"
+    rb"[^;{}\r\n`\"']{0,240}?"
+    rb"username\s*(?:\?\.\s*trim\s*\(\s*\))?\s*(?:\|\||\?\?)\s*"
+    rb"([`\"'])([^`\"'\\\r\n]{1,200})\1"
+)
+# 反向顺序：压缩器可能把 username 放前面。
+RE_NAME_PRIMARY_REV = re.compile(
+    rb"username\s*(?:\?\.\s*trim\s*\(\s*\))?\s*(?:\|\||\?\?)\s*"
+    rb"[^;{}\r\n`\"']{0,240}?"
+    rb"displayName\s*(?:\?\.\s*trim\s*\(\s*\))?\s*(?:\|\||\?\?)\s*"
+    rb"([`\"'])([^`\"'\\\r\n]{1,200})\1"
+)
+# 头像首字母兜底（`Z`)[0]?.toUpperCase()）——是首字母不是显示名，必须排除。
+RE_NAME_INITIAL_TAIL = re.compile(rb"\s*[`\"']?\s*\)\s*\[\s*0\s*\]")
+# ZCodium 1.0.2 打包缺陷：同一作用域内实际变量是 n（= e.webContents.id），
+# disposeWindow 却引用了不存在的 browserWindowId，关窗时抛 ReferenceError。
+RE_WINDOW_ID_BUG = re.compile(rb"\.disposeWindow\s*\(\s*browserWindowId\s*\)")
 
 
 def _expand_all(args) -> None:
@@ -891,6 +926,242 @@ def _asar_find_entry(header: dict, entry_path: str) -> dict | None:
             return None
         node = files[part]
     return node
+
+
+# ---------------------------------------------------------------- 品牌名替换 / 窗口 ID 修复
+# 这两项的共同点：都是「按上下文定位一段字节 → 替换成另一段」，长度可能变化。
+# 因此不能走用量图那种同长度原地覆盖，必须整包重打包（_repack_asar 会重排 offset、
+# 重算 integrity、流式搬运未改动条目）。判据与还原记录沿用 sidecar 机制。
+
+def _walk_script_entries(header: dict):
+    """产出 (路径, entry) 且只含脚本类文件（名字补丁只在脚本里找）。"""
+    for path, ent in _asar_walk_entries(header):
+        if Path(path).suffix.lower() in SCRIPT_EXTS:
+            yield path, ent
+
+
+def _find_display_name_spans(raw: bytes, data_start: int, header: dict):
+    """定位「显示名兜底字面量」，返回 [(路径, 文件内偏移, 长度, 字面量), ...]。
+
+    多级兜底（压缩器可能重排 / 拆分表达式）：
+      1. displayName … username … `字面量`     （主特征）
+      2. username … displayName … `字面量`     （反向顺序）
+      3. 已知品牌字面量出现在 displayName/username 附近
+      4. 全包唯一的品牌字面量（标签被移到独立 i18n 文件时）
+    头像首字母兜底（`Z`)[0]?.toUpperCase()）必须排除，否则会把头像字母改掉。
+    """
+    ents = {}
+    for path, ent in _walk_script_entries(header):
+        ents[path] = (data_start + int(ent["offset"]), int(ent["size"]))
+
+    def _scan(pattern, allow_initial=False):
+        hits = []
+        for path, (off, size) in ents.items():
+            blob = raw[off:off + size]
+            for m in pattern.finditer(blob):
+                lit_start, lit_end = m.start(2), m.end(2)
+                if not allow_initial and RE_NAME_INITIAL_TAIL.match(blob, m.end()):
+                    continue          # 头像首字母，不是显示名
+                hits.append((path, lit_start, lit_end - lit_start, bytes(m.group(2))))
+        return hits
+
+    for pattern in (RE_NAME_PRIMARY, RE_NAME_PRIMARY_REV):
+        hits = _scan(pattern)
+        if hits:
+            return hits
+
+    # 3) 表达式被拆开/换了变量名：在 displayName/username 附近找品牌字面量
+    brand_alt = b"|".join(re.escape(b.encode("utf-8")) for b in DEFAULT_BRANDS)
+    near = re.compile(
+        rb"(?:displayName|username)[\s\S]{0,320}?"
+        rb"(?:\|\||\?\?)\s*([`\"'])(" + brand_alt + rb")\1"
+    )
+    hits = _scan(near, allow_initial=True)
+    if hits:
+        return hits
+
+    # 4) 最后手段：全包中唯一的品牌字面量
+    brand_pat = re.compile(
+        rb"([`\"'])(" + brand_alt + rb")\1"
+    )
+    hits = _scan(brand_pat, allow_initial=True)
+    literals = {h[3] for h in hits}
+    if len(literals) == 1:
+        return hits
+    return []
+
+
+def _apply_span_replacements(blob: bytes, spans) -> bytes:
+    """按偏移倒序替换（倒序保证前面的偏移不被后面的长度变化影响）。"""
+    out = bytearray(blob)
+    for start, length, new in sorted(spans, key=lambda s: s[0], reverse=True):
+        out[start:start + length] = new
+    return bytes(out)
+
+
+def _process_asar_text_patch(asar: Path, check_only: bool, revert: bool, *,
+                             label: str, side_suffix: str,
+                             find_spans, make_replacement,
+                             absent_ok: bool = False,
+                             dry_run: bool = False) -> bool:
+    """「按上下文定位 → 替换文本」的通用链路（品牌名 / 窗口 ID 修复共用）。
+
+    find_spans(raw, data_start, header) -> [(路径, 偏移, 长度, 原字面量), ...]
+    make_replacement(原字面量) -> bytes      （新内容；长度可不同）
+    absent_ok=True 表示「一个都没找到 = 目标状态已达成」而不是失败
+    （缺陷修复类：上游自己修掉之后，这里就不该再报错）。
+
+    写入走 _repack_asar：它会重排 offset、重算 integrity、原子替换，
+    这样长度变化也不会破坏 asar 结构（用量图那种同长度覆盖不适用）。
+    原始条目字节记进 sidecar，便于精确还原。
+    """
+    side = asar.with_name(asar.name + side_suffix)
+
+    try:
+        asar_size = asar.stat().st_size
+        raw, header, data_start = _asar_header_raw(asar)
+    except (OSError, ValueError) as e:
+        print(f"[!] {asar}\n    无法读取：{e}")
+        return False
+
+    if revert:
+        # ★ 这里**不能**按 asar_size 过滤 sidecar：本补丁会让条目长度变化，
+        #   重打包后 asar 总大小必然与打补丁前不同。用大小做指纹会把记录全部作废，
+        #   表现为「有备份却还原不了」。改按路径 + 当前 header 是否仍有该条目来判断。
+        saved = _load_sidecar(side)
+        live_paths = {p for p, _ in _asar_walk_entries(header)}
+        saved = [r for r in saved if r.get("path") in live_paths]
+        if not saved:
+            print(f"[.] {asar}\n    {label}: 没有可用的 sidecar 备份，跳过")
+            return True
+        if dry_run:
+            print(f"[~] {asar}\n    {label}: 将还原 {len(saved)} 个文件")
+            return True
+        overwrite = {r["path"]: base64.b64decode(r["original_b64"]) for r in saved}
+        _repack_asar(asar, overwrite, set())
+        side.unlink(missing_ok=True)
+        print(f"[+] {asar}\n    {label}: 已还原 {len(overwrite)} 个文件")
+        return True
+
+    spans = find_spans(raw, data_start, header)
+    if not spans:
+        if absent_ok:
+            print(f"    [=] {_short(asar)} | {label}: 目标不存在（已修复/无需处理）")
+            return True
+        print(f"    [!] {asar}\n    {label}: 未定位到目标（结构可能已变），拒绝盲改")
+        return False
+
+    by_path: dict[str, list] = {}
+    for path, off, length, lit in spans:
+        ent = _asar_find_entry(header, path)
+        if ent is None:
+            continue
+        by_path.setdefault(path, []).append((off, length, make_replacement(lit)))
+
+    overwrite: dict[str, bytes] = {}
+    for path, repls in by_path.items():
+        ent = _asar_find_entry(header, path)
+        blob = _asar_entry_bytes(raw, data_start, ent)
+        new_blob = _apply_span_replacements(blob, repls)
+        if new_blob != blob:
+            overwrite[path] = new_blob
+
+    # 已经全部是目标内容 → 幂等跳过（但补 sidecar，保证还能还原）
+    if not overwrite:
+        print(f"    [=] {_short(asar)} | {label}: 已是目标内容，跳过")
+        return True
+
+    if check_only:
+        for path in overwrite:
+            print(f"    [ ] {_short(path)} | {label}: 待写入")
+        return True
+
+    if dry_run:
+        print(f"[~] {asar}\n    {label}: 将重打包 {len(overwrite)} 个文件")
+        return True
+
+    # sidecar 记录「改之前的原始字节」，只在首次创建（保留最早的干净副本）
+    if not side.is_file():
+        records = []
+        for path in overwrite:
+            ent = _asar_find_entry(header, path)
+            records.append({
+                "path": path,
+                "asar_size": asar_size,
+                "original_b64": base64.b64encode(
+                    _asar_entry_bytes(raw, data_start, ent)).decode("ascii"),
+            })
+        side.write_text(json.dumps({"patches": records}, ensure_ascii=False),
+                        encoding="utf-8")
+
+    _repack_asar(asar, overwrite, set())
+    print(f"[+] {asar}\n    {label}: 已写入 {len(overwrite)} 个文件（备份 {side.name}）")
+    return True
+
+
+def _short(p: str | Path) -> str:
+    return str(p).replace("\\", "/").split("/")[-1]
+
+
+def process_display_name(asar: Path, check_only: bool, revert: bool, *,
+                         name: str | None = None,
+                         dry_run: bool = False) -> bool:
+    """把渲染层的显示名兜底字面量换成 name。
+
+    name=None 表示「未指定目标名」——此时**什么都不改**，直接按无需处理返回。
+    这样插件开关可以默认开启（满足「装完即用」的契约）而不会擅自改动品牌名：
+    改名是用户的个性化选择，不该在没人要求时发生。
+    """
+    # 未指定目标名：这是一种「保持原样」的合法状态，不产生任何改动。
+    # 还原/检查模式仍要照常走（它们不需要 name；还原读 sidecar 原文）。
+    if name is None:
+        if revert:
+            name = b""                      # 占位，revert 分支不会用到
+        else:
+            print(f"    [=] {_short(asar)} | 品牌名替换: 未指定目标名（--name），保持原样")
+            return True
+
+    def find(raw, data_start, header):
+        return _find_display_name_spans(raw, data_start, header)
+
+    def repl(_old: bytes) -> bytes:
+        return name.encode("utf-8")
+
+    return _process_asar_text_patch(
+        asar, check_only, revert,
+        label=("品牌名替换（还原）" if revert and name is None
+               else f"品牌名替换 → {name}"),
+        side_suffix=".name-patch.json",
+        find_spans=find, make_replacement=repl, dry_run=dry_run)
+
+
+def process_window_id_fix(asar: Path, check_only: bool, revert: bool, *,
+                          dry_run: bool = False) -> bool:
+    """修 ZCodium 1.0.2 的 disposeWindow(browserWindowId) 未定义变量缺陷。
+
+    同作用域内 n = e.webContents.id，是 disposeWindow 期望的窗口 id；
+    旁边的 disposeRemoteWorkspaceSessionsForWindow(n, ...) 用法一致。
+    """
+    def find(raw, data_start, header):
+        hits = []
+        for path, ent in _walk_script_entries(header):
+            off = data_start + int(ent["offset"])
+            blob = raw[off:off + int(ent["size"])]
+            for m in RE_WINDOW_ID_BUG.finditer(blob):
+                hits.append((path, m.start(), m.end() - m.start(),
+                             bytes(m.group(0))))
+        return hits
+
+    def repl(_old: bytes) -> bytes:
+        return b".disposeWindow(n)"
+
+    return _process_asar_text_patch(
+        asar, check_only, revert,
+        label="窗口 ID 缺陷修复",
+        side_suffix=".winid-patch.json",
+        find_spans=find, make_replacement=repl,
+        absent_ok=True, dry_run=dry_run)
+
 
 
 def _asar_sync_integrity(asar: Path, entry_path: str, new_bytes: bytes, *,
@@ -3141,6 +3412,13 @@ def main() -> int:
                     help="注入「增强提示词」按钮：输入框旁一键用当前选中的模型润色草稿，asar 重打包级")
     ap.add_argument("--enhance-src", default=None,
                     help="指定注入的 zcode-enhance-prompt.js 路径（默认用本脚本同目录自带的）")
+    ap.add_argument("--display-name", action="store_true",
+                    help="把渲染层的显示名兜底字面量换成 --name 指定的名字（需同时给出 --name）")
+    ap.add_argument("--name", default=None,
+                    help=f"配合 --display-name：目标名字（示例：{DEFAULT_DISPLAY_NAME}）。"
+                         f"不给出时保持客户端原有品牌名不变")
+    ap.add_argument("--window-id-fix", action="store_true",
+                    help="修 ZCodium 1.0.2 的 disposeWindow(browserWindowId) 未定义变量缺陷")
     ap.add_argument("--prune", action="store_true",
                     help="清理安装目录里的补丁产物（旧版本归档 / 临时文件残留）")
     ap.add_argument("--deep", action="store_true",
@@ -3170,7 +3448,8 @@ def main() -> int:
         return 0
 
     asar_flags = any((args.usage_chart, args.model_width, args.tps_footer,
-                      args.thought_slider, args.model_puller, args.enhance_prompt))
+                      args.thought_slider, args.model_puller, args.enhance_prompt,
+                      args.display_name, args.window_id_fix))
     mode = "检查" if args.check else ("还原" if args.revert else ("预演" if args.dry_run else "打补丁"))
     fails: list[str] = []
     results: list[tuple[str, str, bool]] = []      # (补丁名, 目标, 是否成功)
@@ -3224,6 +3503,12 @@ def main() -> int:
              lambda a: process_enhance_prompt(a, args.check, args.revert,
                                               Path(args.enhance_src) if args.enhance_src else None,
                                               dry_run=args.dry_run, version=version)),
+            (args.display_name, "品牌名替换",
+             lambda a: process_display_name(a, args.check, args.revert,
+                                            name=args.name, dry_run=args.dry_run)),
+            (args.window_id_fix, "窗口 ID 缺陷修复",
+             lambda a: process_window_id_fix(a, args.check, args.revert,
+                                             dry_run=args.dry_run)),
         ]
         for enabled, title, fn in steps:
             if not enabled:

@@ -89,6 +89,8 @@ PATCHES = [
     ("enhance_prompt", ["--enhance-prompt"], True),
     ("model_puller", ["--model-puller"], True),
     ("core_patch", [], False),                             # ≤3.11 内核补丁
+    ("display_name", ["--display-name"], True),            # 品牌名替换（重打包级）
+    ("window_id_fix", ["--window-id-fix"], True),          # 窗口 ID 缺陷修复（重打包级）
 ]
 
 DETACHED_PROCESS = 0x00000008

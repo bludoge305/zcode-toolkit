@@ -167,6 +167,8 @@ PATCH_ARGS = {
     "enhance_prompt": ["--enhance-prompt"],
     "model_puller": ["--model-puller"],
     "core_patch": [],
+    "display_name": ["--display-name"],
+    "window_id_fix": ["--window-id-fix"],
 }
 # 未收到 --want 时的默认动作（本地计划任务用）：全量 7 项补丁按序全部应用
 DEFAULT_TASKS = [

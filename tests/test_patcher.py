@@ -2985,7 +2985,11 @@ class TestConsoleEncoding(unittest.TestCase):
         self.assertNotIn("UnicodeEncodeError", out, out[-600:])
         self.assertNotIn("Traceback", out, out[-600:])
         self.assertIn("执行汇总", out)
-        self.assertIn("合计 8 项", out)
+        # 项数随补丁增减变化，用 ALL_PATCH_FLAGS 推导，避免每加一项就红一次。
+        # ALL_PATCH_FLAGS 里 reasoning_config 不产生 asar 级汇总行（它单独走配置分支），
+        # 所以汇总行数 = len(ALL_PATCH_FLAGS) + 1（内核补丁那一行）。
+        expected = len(zp.ALL_PATCH_FLAGS) + 1
+        self.assertIn(f"合计 {expected} 项", out)
 
 
 class TestZcodeLogScan(unittest.TestCase):
@@ -4320,3 +4324,129 @@ class TestRunnerEntrypoints(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ------------------------------------------------------------------ 品牌名替换 / 窗口 ID 修复
+# 移植自 ZCodium_username 项目的两个补丁。这里用合成 asar 覆盖定位、长度变化、
+# 幂等、还原与「缺陷已不存在」四种情况——它们各自踩过不同的坑。
+
+class TestDisplayNamePatch(TempCase):
+    RENDERER = (
+        b'function A(e){return e?.displayName?.trim()||e?.username?.trim()||`ZCodium`}'
+        b'function B(e){return(e?.username?.trim()||`Z`)[0]?.toUpperCase()}'
+    )
+    OTHER = b'var x=1;'
+
+    def setUp(self):
+        super().setUp()
+        self.asar = self.tmp / "app.asar"
+        build_asar(self.asar, {
+            "out/renderer/assets/app.js": self.RENDERER,
+            "out/main/index.js": self.OTHER,
+        })
+
+    def read(self, p):
+        raw, header, ds = zp._asar_header_raw(self.asar)
+        return zp._asar_entry_bytes(raw, ds, zp._asar_find_entry(header, p))
+
+    def test_detects_brand_literal_not_initial(self):
+        raw, header, ds = zp._asar_header_raw(self.asar)
+        spans = zp._find_display_name_spans(raw, ds, header)
+        self.assertEqual(len(spans), 1, "应只命中显示名兜底，不含头像首字母")
+        path, off, ln, lit = spans[0]
+        self.assertEqual(lit, b"ZCodium")
+        self.assertEqual(path, "out/renderer/assets/app.js")
+
+    def test_longer_name_triggers_repack(self):
+        """新名字更长（=长度变化）必须走重打包，且 asar 结构仍然自洽。"""
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
+        blob = self.read("out/renderer/assets/app.js")
+        self.assertIn(b"`Bludoge`", blob)
+        self.assertNotIn(b"`ZCodium`", blob)
+        # 头像首字母不能被误改
+        self.assertIn(b"`Z`)", blob)
+        # 结构自洽：全部条目都能按 header 正确读出
+        raw, header, ds = zp._asar_header_raw(self.asar)
+        for p, ent in zp._asar_walk_entries(header):
+            self.assertEqual(len(zp._asar_entry_bytes(raw, ds, ent)), int(ent["size"]), p)
+
+    def test_shorter_name(self):
+        self.asar.unlink()
+        build_asar(self.asar, {"out/renderer/assets/app.js": self.RENDERER})
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="Z"))
+        self.assertIn(b"`Z`", self.read("out/renderer/assets/app.js"))
+
+    def test_idempotent(self):
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
+        before = self.asar.read_bytes()
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
+        self.assertEqual(self.asar.read_bytes(), before, "二次运行不应改动文件")
+
+    def test_revert_restores_original(self):
+        original = self.asar.read_bytes()
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
+        self.assertNotEqual(self.asar.read_bytes(), original)
+        self.assertTrue(zp.process_display_name(self.asar, False, True))
+        self.assertEqual(self.read("out/renderer/assets/app.js"), self.RENDERER)
+
+    def test_check_does_not_write(self):
+        before = self.asar.read_bytes()
+        self.assertTrue(zp.process_display_name(self.asar, True, False, name="Bludoge"))
+        self.assertEqual(self.asar.read_bytes(), before, "--check 竟然写了盘")
+
+    def test_dry_run_does_not_write(self):
+        before = self.asar.read_bytes()
+        self.assertTrue(zp.process_display_name(self.asar, False, False,
+                                                name="Bludoge", dry_run=True))
+        self.assertEqual(self.asar.read_bytes(), before, "--dry-run 竟然写了盘")
+        self.assertFalse((self.asar.with_name("app.asar.name-patch.json")).exists())
+
+    def test_no_candidate_is_failure(self):
+        """结构完全不含显示名表达式时必须报失败，不能静默成功。"""
+        self.asar.unlink()
+        build_asar(self.asar, {"out/main/index.js": b"var y=2;"})
+        self.assertFalse(zp.process_display_name(self.asar, False, False, name="Bludoge"))
+
+    def test_reversed_order_expression(self):
+        """压缩器把 username 放前面时也要命中。"""
+        self.asar.unlink()
+        build_asar(self.asar, {
+            "out/renderer/a.js":
+                b'function f(e){return e?.username?.trim()||e?.displayName?.trim()||`ZCodium`}',
+        })
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
+        self.assertIn(b"`Bludoge`", self.read("out/renderer/a.js"))
+
+
+class TestWindowIdFix(TempCase):
+    def setUp(self):
+        super().setUp()
+        self.asar = self.tmp / "app.asar"
+
+    def read(self, p):
+        raw, header, ds = zp._asar_header_raw(self.asar)
+        return zp._asar_entry_bytes(raw, ds, zp._asar_find_entry(header, p))
+
+    def test_fixes_undefined_variable(self):
+        build_asar(self.asar, {
+            "out/main/index.js": b'function f(){var n=e.webContents.id;w.disposeWindow(browserWindowId)}',
+        })
+        self.assertTrue(zp.process_window_id_fix(self.asar, False, False))
+        blob = self.read("out/main/index.js")
+        self.assertIn(b".disposeWindow(n)", blob)
+        self.assertNotIn(b"browserWindowId", blob)
+
+    def test_absent_target_is_success(self):
+        """缺陷已被上游修掉时，不该报失败（否则每次 --all 都红一项）。"""
+        build_asar(self.asar, {
+            "out/main/index.js": b'function f(){w.disposeWindow(n);w.disposeWindow(t)}',
+        })
+        self.assertTrue(zp.process_window_id_fix(self.asar, False, False))
+        self.assertTrue(zp.process_window_id_fix(self.asar, True, False))
+
+    def test_revert(self):
+        src = b'function f(){var n=e.webContents.id;w.disposeWindow(browserWindowId)}'
+        build_asar(self.asar, {"out/main/index.js": src})
+        self.assertTrue(zp.process_window_id_fix(self.asar, False, False))
+        self.assertTrue(zp.process_window_id_fix(self.asar, False, True))
+        self.assertEqual(self.read("out/main/index.js"), src)

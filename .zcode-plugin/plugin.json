@@ -1,6 +1,6 @@
 {
   "name": "zcode-tokenspeed",
-  "version": "0.6.24",
+  "version": "0.6.25",
   "description": "ZCode 桌面客户端全方位原生体验增强套件：TPS 实时状态栏、思考强度悬浮滑条、提示词多模型智能润色、用量图表去截断、模型浮窗加宽与设置页模型拉取。内置客户端升级自动感知与无感自愈看护，全量幂等、安全可还原，支持按需逐项开关。",
   "author": {
     "name": "c80361619"
@@ -54,6 +54,18 @@
       "type": "boolean",
       "title": "思考档位内核补丁（旧版专用）",
       "description": "仅 ZCode 3.11.2 及更早版本需要。3.14.x 起内核改为原生 optionSpecs 机制，本项会被自动识别并跳过（脚本提示「不适用」），不会误报成已生效。默认开启。",
+      "default": true
+    },
+    "display_name": {
+      "type": "boolean",
+      "title": "品牌名替换",
+      "description": "把界面里显示名的兜底字面量换成自定义名字。默认开启但**不改动任何东西**：只有你在配置里设置了目标名（或手动传 --name）才会真正替换；未设置时保持客户端原有的品牌名，行为与未打补丁一致。长度变化时自动整包重建。",
+      "default": true
+    },
+    "window_id_fix": {
+      "type": "boolean",
+      "title": "窗口 ID 缺陷修复",
+      "description": "修 ZCodium 1.0.2 打包缺陷：disposeWindow(browserWindowId) 引用了未定义变量，关闭窗口时抛 ReferenceError。上游已修复的版本会自动识别为「无需处理」，不报失败。默认开启。",
       "default": true
     }
   }

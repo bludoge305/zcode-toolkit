@@ -64,11 +64,14 @@ PATCH_KEYS = [
     ("thought_slider", "思考强度滑条"),
     ("enhance_prompt", "增强提示词"),
     ("model_puller", "模型拉取按钮"),
+    ("display_name", "品牌名替换"),
+    ("window_id_fix", "窗口 ID 缺陷修复"),
 ]
 # 「重打包级」= 要改写整个 app.asar（其余几项只改 provider_config.json / 字节级原地覆盖）。
-# 注意：**生效时机上八项没有区别** —— zcode_patcher.py 只要发现 ZCode.exe 在跑就一律拒绝写入，
+# 注意：**生效时机上各项没有区别** —— zcode_patcher.py 只要发现客户端在跑就一律拒绝写入，
 # 所以都得等退出后由看护写。这个集合只用来区分「改的东西有多重」，不再代表「要不要重启」。
-REPACK_KEYS = {"tps_footer", "thought_slider", "enhance_prompt", "model_puller"}
+REPACK_KEYS = {"tps_footer", "thought_slider", "enhance_prompt", "model_puller",
+               "display_name", "window_id_fix"}
 
 OK, WARN, BAD, INFO = "  [√]", "  [!]", "  [×]", "  [i]"
 

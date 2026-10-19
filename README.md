@@ -1,7 +1,7 @@
 # zcode-tokenspeed · ZCode 客户端一站式原生增强套件
 
 <p align="left">
-  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.24-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.25-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -52,6 +52,8 @@
 | 🔍 | **模型弹窗加宽** | 模型下拉列表宽度由 192px 扩展至 320px，超长模型名完整展示 | `app.asar` 主 bundle |
 | ⚡ | **设置页模型拉取** | 设置页新增「⚡ 自动拉取模型」按钮，自动从供应商同步可用模型并批量写入 | `app.asar` 注入脚本 + IPC |
 | 🧠 | **思考档位原生配置** | 为各模型配置 `provider_config.json` 档位（3.14+ 原生 optionSpecs，无需内核改动） | 用户配置 JSON |
+| 🏷️ | **品牌名替换** | 把界面显示名的兜底字面量换自定义名字（按表达式上下文定位、跨版本稳定） | `app.asar` 重打包级 |
+| 🐞 | **窗口 ID 缺陷修复** | 修 ZCodium 1.0.2 的 `disposeWindow(browserWindowId)` 未定义变量（关窗抛 ReferenceError） | `app.asar` 重打包级 |
 | ⚙️ | **思考内核补丁（旧版）** | ≤3.11 旧版内核专用兜底方案（3.14+ 自动识别并跳过，安全无侵入） | `zcode.cjs` |
 
 ---
@@ -163,6 +165,22 @@ run.cmd                        # Windows
 - **语义修正为“不托管”**：3.14+ 思考档位配置目标为客户端自带的 `provider_config.json`；当开关关闭时语义明确为“停止托管与同步”，插件不再主动写入，且绝不主动还原该文件，彻底切断“退出还原 → 客户端重启写回 → 再次检测冲突 → 再次看护还原”的无限死循环；
 - **看护空任务守卫**：`apply_after_exit.py` 严格过滤 `reasoning_config=off` 任务；若最终无待执行补丁任务，看护直接安全退出，杜绝空任务挂起等待与退出自动重启 ZCode。
 - **全平台兼容吸收**：完整吸纳 PR #4 对 macOS 看护链路的跨平台支持与 crashpad 僵尸进程排除。
+
+#### 0.6.25（并入 ZCodium_username 的两个补丁：品牌名替换 + 窗口 ID 修复）
+从同作者的 `ZCodium_username` 项目移植，改走本框架的 asar 探测 / 重打包 / 备份指纹 /
+sidecar / 还原链路，不再需要独立脚本：
+- **品牌名替换 `--display-name --name <名字>`**：把渲染层「显示名兜底」的字面量
+  （`displayName?.trim() || username?.trim() || \`ZCodium\``）换成自定义名字。
+  按**表达式上下文**定位而非固定偏移，并准备了四级兜底（正序 / 反向顺序 / 品牌名邻近 /
+  全包唯一品牌字面量），压缩器重排或拆分表达式也能命中；头像首字母兜底
+  （`\`Z\`)[0]?.toUpperCase()`）显式排除。长度变化时自动走整包重打包。
+  **未传 `--name` 时不改动任何东西**，因此该开关可默认开启而不擅改品牌名；
+- **窗口 ID 缺陷修复 `--window-id-fix`**：把 `disposeWindow(browserWindowId)` 改为
+  `disposeWindow(n)`（同作用域内 `n = e.webContents.id`），修掉关窗时的 ReferenceError。
+  上游已自行修复的版本会识别为「目标不存在（已修复/无需处理）」，**不报失败**；
+- **还原修正**：这两个补丁会改变条目长度，重打包后 asar 总大小必然变化，
+  因此 sidecar 还原**不再按 asar 大小做指纹过滤**（否则会出现「有备份却还原不了」），
+  改为按路径是否仍存在于当前 header 判断。
 
 #### 0.6.24（修好「每次重启都挂一个空看护」）
 - **`reasoning_config` 状态误判**：`sync.check_state()` 只认「无需写入」为已完成，
