@@ -4651,7 +4651,8 @@ class TestRenameStateRecognition(TempCase):
             zp.process_display_name(self.asar, True, False, name="123")
         text = out.getvalue()
         self.assertIn("待写入", text, "改名模式应输出「待写入」")
-        self.assertEqual(_sync.check_state(["--display-name", "--name", "123"]), "off")
+        # check_state 跑真实 asar（可能已是 123），此处只验输出措辞
+        self.assertIn("123", text)
 
     def test_pending_restore_is_off(self):
         """有 sidecar 时输出「待还原」，语义是 off。
@@ -4708,8 +4709,11 @@ class TestNoSidecarIsOn(TempCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertTrue(zp.process_display_name(self.asar, True, False))
+        # 只验措辞：process_display_name 是单函数，汇总表在 main() 里打。
+        # check_state 跑的是真实客户端 asar，与本临时件无关，不能拿来断言。
         self.assertIn("没有可用的 sidecar 备份", out.getvalue())
-        self.assertEqual(_sync.check_state(["--display-name"]), "on")
+        self.assertTrue(zp.process_display_name(self.asar, True, False),
+                        "没有 sidecar 时应返回成功（已是原样），不是失败")
 
     def test_after_revert_is_on(self):
         import sync as _sync
@@ -4717,4 +4721,7 @@ class TestNoSidecarIsOn(TempCase):
         self.assertTrue(zp.process_display_name(self.asar, False, False))   # 还原
         self.assertFalse((self.tmp / "app.asar.name-patch.json").exists(),
                          "还原后 sidecar 应被清理")
-        self.assertEqual(_sync.check_state(["--display-name"]), "on")
+        # 还原后内容回到原样
+        raw, header, ds = zp._asar_header_raw(self.asar)
+        blob = zp._asar_entry_bytes(raw, ds, zp._asar_find_entry(header, "out/renderer/a.js"))
+        self.assertIn(b"`ZCodium`", blob)

@@ -728,9 +728,12 @@ def detect_upgrade_or_first_run() -> tuple[bool, bool, str]:
         try:
             old_fp = json.loads(CLIENT_FINGERPRINT.read_text(encoding="utf-8"))
             if old_fp.get("asar_path") == cur_fp.get("asar_path"):
+                # ★ 只认**版本号**变化，不能拿 asar 大小当升级信号。
+                #   本插件自己的补丁就会改变 asar 大小（改名会改条目长度、
+                #   注入脚本会新增文件，每次重打包后 size 都不同）。
+                #   把 size 差异当成「客户端升级」会导致：打完补丁 → 下次会话启动
+                #   必然误报「检测到客户端升级」，用户反复被提示去退出重启，实际什么也没变。
                 if old_fp.get("version") and cur_ver and old_fp.get("version") != cur_ver:
-                    is_upgrade = True
-                elif old_fp.get("size") != cur_fp.get("size"):
                     is_upgrade = True
         except Exception:
             pass
