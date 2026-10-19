@@ -384,6 +384,11 @@ def check_state(args) -> str:
         return "off"
     if "已打" in out:
         return "on"
+    # 品牌名替换的无参模式 = 还原：输出「待还原 N 个文件」。
+    # 这表示「还没回到原始品牌名」，与 off（尚未达目标）同义——必须能识别，
+    # 否则落到 unknown，run_sync 会把它当失败而不是「等退出后还原」。
+    if "待还原" in out:
+        return "off"
     # 文本替换类补丁（品牌名 / 窗口 ID 修复）用 [=] 表达「目标状态已达成」，
     # 措辞是「保持原样」「已是目标内容」「目标不存在」——都不含「已打」。
     # 不识别它们会落到 unknown，run_sync 里 unknown 走 failed 分支（误报失败）。
@@ -550,6 +555,17 @@ def resolve_wanted() -> tuple[dict, str]:
     return merged, source
 
 
+def _describe_deferred(key: str, value) -> str:
+    """把待办项写成给人看的一句话。
+
+    字符串型开关不能套用「开/关」：display_name 的值是名字，空值表示还原，
+    写成「display_name→关」会让人以为是把功能关掉了。
+    """
+    if key in STRING_OPTION_KEYS:
+        return f"{key}→{'还原' if not value else value}"
+    return f"{key}→{'开' if value else '关'}"
+
+
 def run_sync(echo: bool = False) -> str:
     """真正干活的同步逻辑。返回一句话结论（同时写进日志与心跳）。
 
@@ -569,12 +585,8 @@ def run_sync(echo: bool = False) -> str:
             # 「思考档位配置」关闭时语义为"不托管"：
             # 不主动写入，绝不主动还原 provider_config.json（客户端会自行写回，还原注定失效且会触发看护无限重启死循环）。
             continue
-        if key in STRING_OPTION_KEYS and not want:
-            # 字符串型开关为空 = 用户没指定名字 = 保持客户端原样。
-            # **既不写入也不还原**，也不计入 skipped（skipped 的语义是「本版本不适用」，
-            # 写进心跳会让人误以为这个功能被版本跳过了）。想撤销已写入的名字用 --revert。
-            continue
-        # display_name 的 want 是「名字」而不是布尔：拼成 `--display-name --name <名字>`。
+        # display_name 的 want 是「名字」而不是布尔：非空时拼成
+        # `--display-name --name <名字>`；为空时只带 `--display-name`（= 还原）。
         args = patch_args(key, args, want)
         state = check_state(args)
         if state == "na":
@@ -609,6 +621,23 @@ def run_sync(echo: bool = False) -> str:
             else:
                 failed.append(f"{key}(更新失败)")
             continue
+        if key in STRING_OPTION_KEYS and not want:
+            # 空名字 = 要还原成原品牌名。state=off 表示「还没还原」→ 执行还原；
+            # state=on 表示「已经是原品牌名」→ 无事可做。
+            # 注意不能落到下面的通用分支：那里 `not want and state == "off"` 会走
+            # 「已一致」continue，正好把还原需求吞掉。
+            if state == "off":
+                if repack:
+                    deferred[key] = want
+                else:
+                    verdict = run_patcher(args, revert=True)
+                    if verdict == "ok":
+                        changed.append(f"{key}→还原")
+                    elif verdict == "refused":
+                        deferred[key] = want
+                    else:
+                        failed.append(f"{key}(还原失败)")
+            continue
         if want and state == "off":
             need_revert = False
         elif not want and state == "on":
@@ -640,7 +669,7 @@ def run_sync(echo: bool = False) -> str:
     rest = {k: v for k, v in deferred.items() if k not in refreshed}
     if rest:
         parts.append("ZCode 退出时写入（下次启动可见）: " + "、".join(
-            f"{k}→{'开' if v else '关'}" for k, v in rest.items()))
+            _describe_deferred(k, v) for k, v in rest.items()))
     if skipped:
         parts.append("本版本不适用: " + "、".join(skipped))
     if failed:

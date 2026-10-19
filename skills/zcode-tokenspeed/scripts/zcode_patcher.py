@@ -1037,6 +1037,10 @@ def _process_asar_text_patch(asar: Path, check_only: bool, revert: bool, *,
         if dry_run:
             print(f"[~] {asar}\n    {label}: 将还原 {len(saved)} 个文件")
             return True
+        if check_only:
+            # --check 是只读的：这里必须拦住，否则「体检」会真的改写 asar
+            print(f"    [ ] {_short(asar)} | {label}: 待还原 {len(saved)} 个文件")
+            return True
         overwrite = {r["path"]: base64.b64decode(r["original_b64"]) for r in saved}
         _repack_asar(asar, overwrite, set())
         side.unlink(missing_ok=True)
@@ -1108,19 +1112,23 @@ def process_display_name(asar: Path, check_only: bool, revert: bool, *,
                          dry_run: bool = False) -> bool:
     """把渲染层的显示名兜底字面量换成 name。
 
-    name=None 表示「未指定目标名」——此时**什么都不改**，直接按无需处理返回。
-    这样插件开关可以默认开启（满足「装完即用」的契约）而不会擅自改动品牌名：
-    改名是用户的个性化选择，不该在没人要求时发生。
+    **name=None 等价于「还原成原品牌名」**（与 --revert 同义）：
+    用户跑 `/zcode-patch-setdisplayname` 不带参数时，期望看到的就是恢复 ZCodium，
+    而不是「保持当前（可能已被改过的）名字」。早期把 None 当成「保持原样」，
+    结果是改过名字后再无参执行什么也不会发生——与用户直觉相反。
+
+    命令行想「什么都不做」时应显式跳过该补丁，而不是靠省略 --name 表达。
     """
-    # 未指定目标名：这是一种「保持原样」的合法状态，不产生任何改动。
-    # 还原模式仍要照常走（它读 sidecar 原文，不需要 name）。
-    unnamed = name is None
-    if unnamed:
-        if revert:
-            name = ""                       # 占位；revert 分支不会调用 make_replacement
-        else:
-            print(f"    [=] {_short(asar)} | 品牌名替换: 未指定目标名（--name），保持原样")
-            return True
+    if name is None:
+        # 无参 = 还原成原品牌名。sidecar 里存的就是原始字面量，走通用还原分支。
+        # ⚠️ 必须把 check_only/dry_run 原样传下去：否则 `--check` 会真的去写盘。
+        return _process_asar_text_patch(
+            asar, check_only, True,
+            label="品牌名替换（还原）",
+            side_suffix=".name-patch.json",
+            find_spans=lambda raw, ds, h: _find_display_name_spans(raw, ds, h),
+            make_replacement=lambda _old: b"",       # 还原分支不会用到
+            dry_run=dry_run)
 
     def find(raw, data_start, header):
         return _find_display_name_spans(raw, data_start, header)

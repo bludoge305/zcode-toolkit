@@ -4558,3 +4558,72 @@ class TestStringOptionPlumbing(TempCase):
     def test_empty_name_is_not_treated_as_off(self):
         """空名字 = 保持原样，不能触发 revert（那会把用户已写入的名字撤掉）。"""
         self.assertFalse(self.sync._coerce({"display_name": ""}).get("display_name"))
+
+
+class TestDisplayNameRestoreSemantics(TempCase):
+    """无参 = 还原成原品牌名。
+
+    早期把「未指定名字」当成「保持原样」，导致改过名之后再无参执行毫无变化——
+    与用户直觉相反（他期望看到的是恢复 ZCodium）。这里钉死新语义。
+    """
+
+    RENDERER = b'function A(e){return e?.displayName?.trim()||e?.username?.trim()||`ZCodium`}'
+
+    def setUp(self):
+        super().setUp()
+        self.asar = self.tmp / "app.asar"
+        build_asar(self.asar, {"out/renderer/a.js": self.RENDERER})
+
+    def read(self):
+        raw, header, ds = zp._asar_header_raw(self.asar)
+        return zp._asar_entry_bytes(raw, ds, zp._asar_find_entry(header, "out/renderer/a.js"))
+
+    def test_no_name_restores_original(self):
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
+        self.assertIn(b"`Bludoge`", self.read())
+        # 无参执行 → 还原成 ZCodium
+        self.assertTrue(zp.process_display_name(self.asar, False, False))
+        self.assertIn(b"`ZCodium`", self.read())
+        self.assertNotIn(b"`Bludoge`", self.read())
+
+    def test_no_name_check_is_read_only(self):
+        """--check 绝不能写盘：它是最常被随手跑的命令。"""
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
+        before = self.asar.read_bytes()
+        self.assertTrue(zp.process_display_name(self.asar, True, False))
+        self.assertEqual(self.asar.read_bytes(), before, "--check 竟然写了盘")
+
+    def test_no_name_check_reports_pending_restore(self):
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            zp.process_display_name(self.asar, True, False)
+        self.assertIn("待还原", buf.getvalue())
+
+    def test_no_name_when_never_renamed_is_noop(self):
+        """从未改过名时，无参执行应报告「没有可用的 sidecar 备份」而不是失败。"""
+        before = self.asar.read_bytes()
+        self.assertTrue(zp.process_display_name(self.asar, False, False))
+        self.assertEqual(self.asar.read_bytes(), before)
+
+    def test_no_name_dry_run_does_not_write(self):
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
+        before = self.asar.read_bytes()
+        self.assertTrue(zp.process_display_name(self.asar, False, False, dry_run=True))
+        self.assertEqual(self.asar.read_bytes(), before)
+
+    def test_check_state_recognises_pending_restore(self):
+        """sync 必须把「待还原」判成 off（= 还没达成），否则会掉进 unknown 报失败。"""
+        import sync as _sync
+        r = subprocess.run([sys.executable, str(zp.__file__), "--display-name", "--check"],
+                           capture_output=True, encoding="utf-8", errors="replace", timeout=300)
+        out = (r.stdout or "") + (r.stderr or "")
+        if "待还原" in out:
+            self.assertEqual(_sync.check_state(["--display-name"]), "off")
+
+    def test_describe_deferred_wording(self):
+        import sync as _sync
+        self.assertEqual(_sync._describe_deferred("display_name", ""), "display_name→还原")
+        self.assertEqual(_sync._describe_deferred("display_name", "Bludoge"),
+                         "display_name→Bludoge")
+        self.assertEqual(_sync._describe_deferred("tps_footer", False), "tps_footer→关")
