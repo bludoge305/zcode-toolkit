@@ -319,7 +319,15 @@ def check_state(args) -> str:
         # 「无需写入」只出现在「not planned」分支（档位配置已是最新）；
         # 否则就是有 [ ] 待写入项 → off。别用「已是最新」判：该词在有待写入项时也会打印
         # （指的是另外 N 个已配好的模型），会误判成 on。
-        return "on" if "无需写入" in out else "off"
+        if "无需写入" in out:
+            return "on"
+        # ZCodium 等发行版不生成 config.json，档位直接由 provider_config.json 承载，
+        # 脚本会打印「无需迁移」并返回成功。这是**已完成**状态，不是待写入：
+        # 判成 off 会让它每轮都被当成待办 → 反复拉起只含该项的空看护
+        # （实测：客户端重启后一直挂着一个「等退出」的看护，什么也不做）。
+        if "无需迁移" in out:
+            return "on"
+        return "off"
     # 「已打（含旧版组件，重跑可自动更新）」必须排在 "已打" 之前判：
     # 这个串本身包含 "已打"，顺序反了就会被后面那条吃掉，stale 永远走不到。
     if "含旧版组件" in out:
