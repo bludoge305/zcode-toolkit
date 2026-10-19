@@ -1,6 +1,6 @@
 {
   "name": "zcode-tokenspeed",
-  "version": "0.6.30",
+  "version": "0.6.31",
   "description": "ZCode 桌面客户端全方位原生体验增强套件：TPS 实时状态栏、思考强度悬浮滑条、提示词多模型智能润色、用量图表去截断、模型浮窗加宽与设置页模型拉取。内置客户端升级自动感知与无感自愈看护，全量幂等、安全可还原，支持按需逐项开关。",
   "author": {
     "name": "c80361619"
@@ -57,10 +57,10 @@
       "default": true
     },
     "display_name": {
-      "type": "boolean",
-      "title": "品牌名替换",
-      "description": "把界面里显示名的兜底字面量换成自定义名字。默认开启但**不改动任何东西**：只有你在配置里设置了目标名（或手动传 --name）才会真正替换；未设置时保持客户端原有的品牌名，行为与未打补丁一致。长度变化时自动整包重建。",
-      "default": true
+      "type": "string",
+      "title": "界面显示名称",
+      "description": "把界面左下角的显示名改成这里的名字（例如 Bludoge）。**留空则保持客户端原有的 ZCodium 不变**。也可直接用 /zcode-patch-setdisplayname <名字> 设置，两者等价。名字 1-40 字符，不能含引号、反引号、反斜杠或换行；长度变化时自动整包重建。",
+      "default": ""
     },
     "window_id_fix": {
       "type": "boolean",

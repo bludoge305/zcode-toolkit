@@ -182,6 +182,33 @@ DEFAULT_TASKS = [
 ]
 
 
+#: 值语义是「字符串参数」而非纯布尔的开关。
+#: display_name 的值就是目标名字（`--want=display_name=Bludoge`），
+#: 执行时拼成 `--display-name --name Bludoge`。
+STRING_KEYS = {"display_name"}
+
+
+def _parse_want_value(key: str, raw: str):
+    """把 --want 的值归一：字符串型开关返回名字，其余返回 bool（off→False）。"""
+    v = raw.strip()
+    if key in STRING_KEYS:
+        if v.lower() in ("off", "false", "0", "no", ""):
+            return False
+        if v.lower() in ("on", "true", "1", "yes"):
+            return True
+        return v                      # 名字原样返回
+    return v.lower() not in ("off", "false", "0", "no", "")
+
+
+def _task_args(key: str, value) -> list[str]:
+    """把开关值翻译成 zcode_patcher 的参数。"""
+    base = PATCH_ARGS[key]
+    # 布尔 true 不携带名字（老配置/未迁移的情形），避免把 "True" 当名字写上界面
+    if key in STRING_KEYS and isinstance(value, str) and value:
+        return [*base, "--name", value]
+    return list(base)
+
+
 def _save_wants(argv: list[str]) -> None:
     """把传入的 --want 参数与已存的合并并写入 WANT_FILE。"""
     wants_dict = {}
@@ -196,12 +223,12 @@ def _save_wants(argv: list[str]) -> None:
             key, _, val = a[len("--want="):].partition("=")
             key = key.strip()
             if key in PATCH_ARGS:
-                enabled = val.strip().lower() not in ("off", "false", "0", "no")
-                if key == "reasoning_config" and not enabled:
+                parsed = _parse_want_value(key, val)
+                if key == "reasoning_config" and not parsed:
                     # 思考档位配置关闭为"不托管"语义：绝不记录还原请求
                     wants_dict.pop(key, None)
                 else:
-                    wants_dict[key] = enabled
+                    wants_dict[key] = parsed
     if wants_dict:
         try:
             import json
@@ -231,16 +258,17 @@ def parse_wants(argv: list[str]):
             key, _, val = a[len("--want="):].partition("=")
             key = key.strip()
             if key in PATCH_ARGS:
-                merged_wants[key] = val.strip().lower() not in ("off", "false", "0", "no")
+                merged_wants[key] = _parse_want_value(key, val)
 
     if not has_explicit_input and not merged_wants:
         return None
     tasks = []
-    for key, enabled in merged_wants.items():
+    for key, value in merged_wants.items():
+        enabled = bool(value)
         if key == "reasoning_config" and not enabled:
             # 思考档位配置关闭为"不托管"语义：绝不执行 revert，避免覆盖客户端文件并导致重启死循环
             continue
-        tasks.append((PATCH_ARGS[key], not enabled))
+        tasks.append((_task_args(key, value), not enabled))
     return tasks
 
 

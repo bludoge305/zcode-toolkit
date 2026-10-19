@@ -1,54 +1,97 @@
 ---
-description: 设置 ZCodium 界面左下角显示的名称（默认保持 ZCodium 原样）
+description: 设置 ZCodium 界面左下角显示的名称（不带参数则保持 ZCodium 原样）
 ---
 
-加载本插件自带的 `zcode-tokenspeed` 技能（`${CLAUDE_PLUGIN_ROOT}/skills/zcode-tokenspeed/SKILL.md`；若该变量未展开，就按插件安装目录下的同名路径读取），按下述流程修改界面显示名称。
+加载本插件自带的 `zcode-tokenspeed` 技能（`${CLAUDE_PLUGIN_ROOT}/skills/zcode-tokenspeed/SKILL.md`；若该变量未展开，就按插件安装目录下的同名路径读取），然后按下述流程修改界面显示名称。
 
 **用法**
 
 | 命令 | 效果 |
 |---|---|
-| `/zcode-patch-setdisplayname 我的名字` | 把显示名改成「我的名字」 |
-| `/zcode-patch-setdisplayname` | **不带参数 = 保持 `ZCodium`**（不修改，等价于不启用该补丁） |
+| `/zcode-patch-setdisplayname Bludoge` | 把显示名改成 `Bludoge` |
+| `/zcode-patch-setdisplayname` | **保持 `ZCodium` 原样**（不写入任何内容） |
 
-**原理**：替换渲染层里「显示名兜底」的字符串字面量，典型形态是
-`e?.displayName?.trim() || e?.username?.trim() || \`ZCodium\``。
-脚本按**表达式上下文**定位（不依赖固定偏移与版本），所以客户端升级后仍能命中；
-新名字与原名字长度不同时会自动整包重建 asar。头像首字母兜底（`\`Z\`)[0]?.toUpperCase()`）不会被误改。
+---
 
-**流程**
+## 最短路径（默认走这条，别绕远）
 
-1. **解析参数**：从用户消息里取出名字（`/zcode-patch-setdisplayname <名字>` 的 `<名字>` 部分）。
-   - 用户**没给名字** → 视为「保持 ZCodium 原样」，**不要**执行任何写入；回复说明：
-     当前显示名已是 `ZCodium`，无需改动；若想改，给出 `/zcode-patch-setdisplayname <你的名字>`。
-   - 去掉首尾空白；名字必须是 1–40 个字符、不含引号/反引号/反斜杠/换行
-     （这些字符会破坏被替换的 JS 字符串字面量）。不合法时直接告知原因，不要写入。
-2. **只读确认现状**（不写盘）：
-   ```bash
-   python "<skill目录>/scripts/zcode_patcher.py" --display-name --name "<名字>" --check
-   ```
-   - 输出「已是目标内容」→ 已经是该名字，无需改动，直接回复用户。
-   - 输出「待写入」→ 需要写入，继续第 3 步。
-   - 输出「未指定目标名」→ 说明 `--name` 没传进去，检查参数拼接。
-3. **告知生效条件并执行**：这是重打包级补丁，需要 ZCode **完全退出**。
-   - ZCode 正在运行 → `zcode_patcher.py` 会预检拒绝（退出码 2）。此时**不要强写**，
-     改为排期看护（`apply_after_exit.py` 会等客户端退出后自动写入并重新拉起），
-     并明确告诉用户「已排期，下次完全退出 ZCode 时自动生效」。
-   - ZCode 已退出 → 直接执行：
-     ```bash
-     python "<skill目录>/scripts/zcode_patcher.py" --display-name --name "<名字>"
-     ```
-4. **展示还原命令**（务必让用户保存）：
+名字存进**插件配置**即可，剩下的交给现有的 `sync.py` → `apply_after_exit.py` 链路，
+**不要自己写看护脚本、不要手动排期**。
+
+### 第 1 步：只读确认（一条命令）
+
+```bash
+python "<skill目录>/scripts/zcode_patcher.py" --display-name --name "<名字>" --check
+```
+
+- 输出「已是目标内容」→ 已是该名字，**直接回复用户，结束**。
+- 输出「待写入」→ 继续第 2 步。
+- 输出「未定位到目标（结构可能已变）」→ 报告即结论，不要手工改 asar。
+
+### 第 2 步：写入配置（一条命令）
+
+用 `doctor.py --where` 拿到**已安装副本**的绝对路径，然后写
+`~/.zcode/cli/config.json`（ZCodium 是 `~/.zcodium/cli/config.json`）的
+`plugins.options["zcode-tokenspeed@<市场名>"]`：
+
+```json
+{
+  "plugins": {
+    "options": {
+      "zcode-tokenspeed@zcode-toolkit": {
+        "display_name": "Bludoge"
+      }
+    }
+  }
+}
+```
+
+**操作要点**：
+
+- **整份读入 → 只改 `display_name` 这一个键 → 写回**，保留其余键与缩进。
+- `plugins` / `options` / 插件 id 那一层不存在时按需创建；**不要动 `enabledPlugins`**。
+- 写前先把原文件复制一份 `config.json.bak`。
+- 值就是名字本身（字符串），不要再包成 `{"value": ...}`。
+
+### 第 3 步：立即生效（可选，但这是最快路径）
+
+配置写好后，**同步一次**即可让它排进看护队列：
+
+```bash
+python "<skill目录>/scripts/sync.py"
+```
+
+- ZCode **已完全退出** → `display_name` 会当场写入 app.asar（其余项若已一致则跳过），
+  完成后按第 4 步的提示让用户重启。
+- ZCode **正在运行** → sync 会打印「ZCode 退出时写入」，并自动拉起看护；
+  **告诉用户「已排期，下次完全退出 ZCode 时自动写入并重启」**，不要再说「已完成」。
+
+> 如果用户不想等，告诉他：完全退出 ZCode（托盘右键 → 退出，关窗口不算）后，
+> 看护会自动写入并重新拉起客户端。
+
+### 第 4 步：回复用户
+
+一条消息说清三件事：
+
+1. **当前状态**：已写入 / 已排期（下次退出时生效）/ 已是目标名字。
+2. **还原命令**（务必给）：
    ```bash
    python "<skill目录>/scripts/zcode_patcher.py" --display-name --revert
    ```
-   还原不需要 `--name`，sidecar 里存的是原文。
-5. **提示重启验证**：完全退出并重启 ZCode，看界面左下角是否显示新名字。
+   还原不需要 `--name`，原文存在 sidecar `app.asar.name-patch.json` 里；
+   执行前需完全退出 ZCode。
+3. **名字限制**：1–40 字符，不能含引号、反引号、反斜杠、换行。
 
-**注意**
+---
 
-- 这是**你本机的个性化改动**，不影响其他用户；插件默认配置里 `display_name` 开关虽为开，
-  但不指定名字时不会改动任何内容（保持客户端原品牌名）。
-- 脚本报「未定位到目标（结构可能已变）」时，**报告即结论**：说明该客户端版本的显示名表达式
-  结构变了（四级兜底都没命中），不要手工改 asar，把脚本输出原样反馈给用户。
-- `--check` 与 `--dry-run` 不受客户端运行限制，可随时安全跑。
+## 规则
+
+- **不带参数 = 保持 ZCodium**：不写配置、不排期、不改任何文件，直接回复用户
+  「当前保持 ZCodium，如需修改请用 `/zcode-patch-setdisplayname <你的名字>`」。
+- **参数校验**（写配置前做）：去首尾空白；长度 1–40；不含 `` ` `` `"` `'` `\` 与换行。
+  不合法就直接说明原因，不要写入。
+- **不要自己发明命令**：`--display-name` 需要配合 `--name`；单给 `--display-name`
+  会打印「未指定目标名，保持原样」并返回成功（空操作）。
+- **不要写一次性看护脚本**：配置写入后 `sync.py` 会自动排期，这是既有机制。
+- **不要重复启动看护**：`sync.py` 内部有单例锁，重复启动会直接退出，属正常。
+- 路径坑：Git Bash 的 `/c/Users/...` 传给原生 python 时会被改写，**统一用 `C:\...` 绝对路径**。

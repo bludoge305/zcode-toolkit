@@ -93,6 +93,29 @@ PATCHES = [
     ("window_id_fix", ["--window-id-fix"], True),          # 窗口 ID 缺陷修复（重打包级）
 ]
 
+#: 参数需要按「开关的当前值」动态拼装的补丁。
+#: display_name 的值就是目标名字：`["--display-name"]` 只是骨架，
+#: 真正执行时要补上 `--name <值>`，否则 process_display_name 收到 name=None 会空转。
+#: 这条曾经是「setdisplayname 很慢」的根因——看护拿不到名字，只能另写一次性脚本。
+VALUE_ARGS = {
+    "display_name": lambda v: ["--display-name", "--name", str(v)],
+}
+
+
+def patch_args(key: str, args: list[str], value) -> list[str]:
+    """把「开关值」翻译成实际的命令行参数。
+
+    纯布尔开关原样返回 args；字符串型开关（display_name）用值拼出 `--name`。
+    值为 False/空 → 原样返回（由调用方走 revert 分支）。
+    """
+    build = VALUE_ARGS.get(key)
+    if build is None:
+        return list(args)
+    # 布尔 true 不携带名字（老配置/未迁移的情形）：保持原样，避免把 "True" 当名字写进界面
+    if value is True or not value:
+        return list(args)
+    return build(value)
+
 DETACHED_PROCESS = 0x00000008
 CREATE_NO_WINDOW = 0x08000000
 
@@ -177,14 +200,30 @@ def _search(node, path="", depth=0):
 
 
 def _coerce(raw):
-    """把宿主可能写入的字符串布尔归一成 bool。"""
+    """把宿主可能写入的配置值归一。
+
+    布尔开关：true/false（字符串也接受）。
+    **字符串型开关**（当前只有 display_name）：值就是目标名字——它既是「开/关」
+    （非空=开、空串=false），又携带参数。这样用户不必再单独提供一个命令行参数，
+    看护也能原样透传。
+    """
     out = {}
     for key, val in raw.items():
         if isinstance(val, bool):
             out[key] = val
-        elif isinstance(val, str) and val.strip().lower() in ("true", "false"):
-            out[key] = val.strip().lower() == "true"
+        elif isinstance(val, str):
+            low = val.strip().lower()
+            if low in ("true", "false"):
+                out[key] = low == "true"
+            elif key in STRING_OPTION_KEYS and val.strip():
+                out[key] = val.strip()      # 名字本身
+        elif val is None and key in STRING_OPTION_KEYS:
+            out[key] = False                # 显式清空 → 关闭/保持原样
     return out
+
+
+#: 值语义是「字符串参数」而非纯布尔的开关（其余全是布尔开关）。
+STRING_OPTION_KEYS = {"display_name"}
 
 
 def declared_defaults() -> dict:
@@ -220,8 +259,15 @@ def declared_defaults() -> dict:
             uc = data.get("userConfig")
             if not isinstance(uc, dict):
                 continue
-            out = {k: v["default"] for k, v in uc.items()
-                   if isinstance(v, dict) and isinstance(v.get("default"), bool)}
+            out = {}
+            for k, v in uc.items():
+                if not isinstance(v, dict):
+                    continue
+                d = v.get("default")
+                if isinstance(d, bool):
+                    out[k] = d
+                elif isinstance(d, str) and k in STRING_OPTION_KEYS:
+                    out[k] = d      # 字符串型开关：默认值本身就是参数
             if out:
                 return out
     log("没找到插件清单，取不到默认值")
@@ -418,6 +464,19 @@ def _shared_state_dir() -> Path:
     return home / ".zcode"
 
 
+def _want_token(value) -> str:
+    """把开关值编码成 `--want=` 里的 token。
+
+    display_name 的值是名字，必须原样送到看护端；布尔值仍用 on/off
+    （看护端 parse_wants 先按 on/off 解析，解析不了再当字符串值）。
+    """
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    if isinstance(value, str):
+        return value
+    return "off"
+
+
 def start_watchdog(wanted: dict) -> None:
     """启动退出后看护：等 ZCode 退出 → 应用重打包级补丁。"""
     # 过滤掉 reasoning_config 关闭项（不托管语义，绝不调度看护）
@@ -449,7 +508,9 @@ def start_watchdog(wanted: dict) -> None:
         except Exception:
             pass
 
-    args = [f"--want={k}={'on' if v else 'off'}" for k, v in wanted.items()]
+    # want 的值不一定是布尔：display_name 是「名字」。
+    # 映射：True→on、False/空→off、字符串→原样（看护端按 STRING_OPTION_KEYS 识别）。
+    args = [f"--want={k}={_want_token(v)}" for k, v in wanted.items()]
     kw = {"cwd": str(HERE), "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     if os.name == "nt":
         kw["creationflags"] = DETACHED_PROCESS | CREATE_NO_WINDOW
@@ -476,11 +537,14 @@ def resolve_wanted() -> tuple[dict, str]:
             return {}, ""
         log("配置里没有本插件（从未保存过开关）→ 改用插件清单声明的默认值")
         return dict(defaults), "插件默认值（从未保存过开关）"
-    explicit = {k: v for k, v in opts.items() if isinstance(v, bool)}
+    # explicit 要同时收布尔开关与字符串型开关（display_name 的值是名字）。
+    # 只收布尔会把用户设的名字丢掉 → 退回默认空串 → 表现为「设了名字但不生效」。
+    explicit = {k: v for k, v in opts.items()
+                if isinstance(v, bool) or (k in STRING_OPTION_KEYS and isinstance(v, str))}
     if not explicit:
         if not defaults:
             return {}, ""
-        log(f"配置来自 {source}，但没有可用布尔值 → 退回插件默认值")
+        log(f"配置来自 {source}，但没有可用开关值 → 退回插件默认值")
         return dict(defaults), "插件默认值（配置里没有可用开关）"
     merged = {**defaults, **explicit}          # 保存值优先，缺的键补默认值
     return merged, source
@@ -505,6 +569,13 @@ def run_sync(echo: bool = False) -> str:
             # 「思考档位配置」关闭时语义为"不托管"：
             # 不主动写入，绝不主动还原 provider_config.json（客户端会自行写回，还原注定失效且会触发看护无限重启死循环）。
             continue
+        if key in STRING_OPTION_KEYS and not want:
+            # 字符串型开关为空 = 用户没指定名字 = 保持客户端原样。
+            # **既不写入也不还原**，也不计入 skipped（skipped 的语义是「本版本不适用」，
+            # 写进心跳会让人误以为这个功能被版本跳过了）。想撤销已写入的名字用 --revert。
+            continue
+        # display_name 的 want 是「名字」而不是布尔：拼成 `--display-name --name <名字>`。
+        args = patch_args(key, args, want)
         state = check_state(args)
         if state == "na":
             skipped.append(key)          # 本版本不需要这个补丁（如 3.14+ 的内核补丁）

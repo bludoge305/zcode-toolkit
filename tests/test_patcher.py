@@ -2313,7 +2313,9 @@ class TestPluginBoundaryStopsAtPluginRoot(unittest.TestCase):
         d = self.sync.declared_defaults()
         self.assertTrue(d, "本仓库应能读到插件清单默认值")
         self.assertIn("enhance_prompt", d)
-        self.assertTrue(all(isinstance(v, bool) for v in d.values()))
+        # 允许两种类型：布尔开关（True）与字符串型开关（空串 = 不托管）
+        self.assertTrue(all(isinstance(v, (bool, str)) for v in d.values()),
+                        f"默认值类型异常：{ {k: type(v).__name__ for k, v in d.items()} }")
 
     def test_manifest_of_another_plugin_is_skipped(self):
         """上级目录里出现别人的清单时，必须跳过而不是拿它的默认值。"""
@@ -2380,19 +2382,33 @@ class TestAutoInject(unittest.TestCase):
         插件市场安装后，ZCode 的配置里根本没有 `plugins.options` 这一项（用户没点过
         「保存配置」）。若默认值是 false，自动注入就变成「按默认值什么都不做」，
         用户看到的还是「安装成功但没生效」——正是这条要求要消灭的情形。
+
+        **例外：字符串型开关**（`sync.STRING_OPTION_KEYS`，目前只有 `display_name`）。
+        它的默认值是空串，语义是「不指定名字 → 保持客户端原样」，不是「关闭」；
+        改成 true 反而会把字符串 "True" 当名字写进界面。
         """
         manifest = json.loads((_HERE.parent / ".zcode-plugin" / "plugin.json")
                               .read_text(encoding="utf-8"))
         uc = manifest.get("userConfig") or {}
         self.assertEqual(set(uc), self._switch_keys(),
                          "plugin.json 的 userConfig 必须与 sync.PATCHES 一一对应")
-        off = sorted(k for k, v in uc.items() if v.get("default") is not True)
+        off = sorted(
+            k for k, v in uc.items()
+            if k not in self.sync.STRING_OPTION_KEYS and v.get("default") is not True
+        )
         self.assertEqual(off, [], f"这些开关的 default 不是 true，装完不会自动生效: {off}")
+        # 字符串型开关的默认值必须是空串（= 不托管），不能是别的东西
+        for k in self.sync.STRING_OPTION_KEYS & set(uc):
+            self.assertEqual(uc[k].get("default"), "",
+                             f"{k} 是字符串型开关，默认值应为空串（不托管）")
 
     def test_declared_defaults_reads_the_real_manifest(self):
         got = self.sync.declared_defaults()
         self.assertEqual(set(got), self._switch_keys())
-        self.assertTrue(all(got.values()), f"默认值应全为 true，实际 {got}")
+        # 布尔开关必须为 true；字符串型开关不在此列（空串 = 不指定参数）
+        missing = sorted(k for k, v in got.items()
+                         if k not in self.sync.STRING_OPTION_KEYS and v is not True)
+        self.assertEqual(missing, [], f"这些布尔开关默认值不是 true：{missing}")
 
     def test_declared_defaults_skips_non_boolean_entries(self):
         """userConfig 里可能混着非开关项（字符串/枚举），不能当成开关塞进结果。"""
@@ -4450,3 +4466,95 @@ class TestWindowIdFix(TempCase):
         self.assertTrue(zp.process_window_id_fix(self.asar, False, False))
         self.assertTrue(zp.process_window_id_fix(self.asar, False, True))
         self.assertEqual(self.read("out/main/index.js"), src)
+
+
+# ------------------------------------------------------------------ 字符串型开关（display_name）
+# display_name 的值是「名字」而不是布尔：它既是开关又是参数。
+# 这条链路曾经断在三个地方（resolve_wanted 过滤掉字符串、看护拿不到 --name、
+# 只能另写一次性看护脚本），所以逐段钉死。
+
+class TestStringOptionPlumbing(TempCase):
+    def setUp(self):
+        super().setUp()
+        import sync as _sync
+        self.sync = _sync
+
+    def test_patch_args_carries_name(self):
+        self.assertEqual(
+            self.sync.patch_args("display_name", ["--display-name"], "Bludoge"),
+            ["--display-name", "--name", "Bludoge"])
+
+    def test_patch_args_boolean_and_empty_carry_no_name(self):
+        """老配置里可能是 true / 空串：都不能把 "True" 当名字写进界面。"""
+        self.assertEqual(self.sync.patch_args("display_name", ["--display-name"], True),
+                         ["--display-name"])
+        self.assertEqual(self.sync.patch_args("display_name", ["--display-name"], ""),
+                         ["--display-name"])
+        self.assertEqual(self.sync.patch_args("display_name", ["--display-name"], False),
+                         ["--display-name"])
+
+    def test_plain_boolean_switch_untouched(self):
+        self.assertEqual(self.sync.patch_args("tps_footer", ["--tps-footer"], True),
+                         ["--tps-footer"])
+
+    def test_want_token_preserves_name(self):
+        self.assertEqual(self.sync._want_token("Bludoge"), "Bludoge")
+        self.assertEqual(self.sync._want_token(True), "on")
+        self.assertEqual(self.sync._want_token(False), "off")
+
+    def test_coerce_keeps_name_and_normalises_booleans(self):
+        got = self.sync._coerce({"display_name": "Bludoge", "tps_footer": "true",
+                                 "usage_chart": False})
+        self.assertEqual(got["display_name"], "Bludoge")
+        self.assertIs(got["tps_footer"], True)
+        self.assertIs(got["usage_chart"], False)
+
+    def test_watchdog_parses_name_from_want(self):
+        import apply_after_exit as w
+        self.assertEqual(w._parse_want_value("display_name", "Bludoge"), "Bludoge")
+        self.assertIs(w._parse_want_value("display_name", "on"), True)
+        self.assertIs(w._parse_want_value("display_name", "off"), False)
+        self.assertEqual(w._task_args("display_name", "Bludoge"),
+                         ["--display-name", "--name", "Bludoge"])
+        self.assertEqual(w._task_args("display_name", True), ["--display-name"])
+
+    def test_want_roundtrip_through_watchdog(self):
+        """sync 写出的 --want token 必须能被看护原样还原成 --name 参数。"""
+        import apply_after_exit as w
+        tmp = self.tmp / "_watchdog.want"
+        orig = w.WANT_FILE
+        w.WANT_FILE = tmp
+        try:
+            tasks = w.parse_wants(["--want=display_name=Bludoge", "--want=tps_footer=on"])
+            flat = {tuple(a) for a, _r in tasks}
+            self.assertIn(("--display-name", "--name", "Bludoge"), flat)
+            self.assertIn(("--tps-footer",), flat)
+        finally:
+            w.WANT_FILE = orig
+
+    def test_batch_keeps_name_when_merged(self):
+        import apply_after_exit as w
+        tasks = [(["--display-name", "--name", "Bludoge"], False), (["--tps-footer"], False)]
+        merged = w.batch_tasks(tasks)
+        self.assertEqual(len(merged), 1)
+        args, _rev = merged[0]
+        self.assertIn("--name", args)
+        self.assertIn("Bludoge", args)
+        self.assertIn("--tps-footer", args)
+
+    def test_resolve_wanted_does_not_drop_string_value(self):
+        """resolve_wanted 曾经只收布尔值，用户设的名字被静默丢弃。"""
+        cfg = self.tmp / "config.json"
+        cfg.write_text(json.dumps({"plugins": {"options": {
+            "zcode-tokenspeed@m": {"display_name": "Bludoge"}}}}), encoding="utf-8")
+        orig_cfg = self.sync.CONFIG
+        self.sync.CONFIG = cfg
+        try:
+            wanted, _origin = self.sync.resolve_wanted()
+            self.assertEqual(wanted.get("display_name"), "Bludoge")
+        finally:
+            self.sync.CONFIG = orig_cfg
+
+    def test_empty_name_is_not_treated_as_off(self):
+        """空名字 = 保持原样，不能触发 revert（那会把用户已写入的名字撤掉）。"""
+        self.assertFalse(self.sync._coerce({"display_name": ""}).get("display_name"))

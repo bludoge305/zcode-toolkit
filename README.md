@@ -1,7 +1,7 @@
 # zcode-tokenspeed · ZCode 客户端一站式原生增强套件
 
 <p align="left">
-  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.30-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.31-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -165,6 +165,20 @@ run.cmd                        # Windows
 - **语义修正为“不托管”**：3.14+ 思考档位配置目标为客户端自带的 `provider_config.json`；当开关关闭时语义明确为“停止托管与同步”，插件不再主动写入，且绝不主动还原该文件，彻底切断“退出还原 → 客户端重启写回 → 再次检测冲突 → 再次看护还原”的无限死循环；
 - **看护空任务守卫**：`apply_after_exit.py` 严格过滤 `reasoning_config=off` 任务；若最终无待执行补丁任务，看护直接安全退出，杜绝空任务挂起等待与退出自动重启 ZCode。
 - **全平台兼容吸收**：完整吸纳 PR #4 对 macOS 看护链路的跨平台支持与 crashpad 僵尸进程排除。
+
+#### 0.6.31（改名走配置直通，不再需要自建看护）
+- **根因**：`/zcode-patch-setdisplayname` 原先只跑 `--display-name`，而该参数**需要配合
+  `--name`**；看护与 sync 的参数表里也都不带名字，于是排期到退出后只剩一句
+  「未指定目标名，保持原样」的空操作。用户想改名时只能绕过框架、临时写一个一次性看护脚本，
+  流程又长又易错；
+- **`display_name` 改为字符串型开关**：值就是目标名字
+  （`plugins.options[...].display_name = "Bludoge"`），空串表示「保持 ZCodium 原样」；
+  插件配置页也变成可直接填名字的文本框。整条链路（`_coerce` → `resolve_wanted` →
+  `patch_args` → `--want=` token → 看护 `_task_args`）都会原样透传这个名字；
+- **防护**：布尔 `true` / 空串都不会被当成名字（避免把 `"True"` 写到界面上）；
+  空名字按「不托管」处理，**不触发 revert**（否则会撤掉用户已写入的名字）；
+- **命令重写**：`/zcode-patch-setdisplayname` 改为三行以内的最短路径——只读确认 →
+  写配置 → `sync.py` 自动排期，并明确禁止「自己写看护脚本」。
 
 #### 0.6.30（命令补齐新功能，新增 `/zcode-patch-setdisplayname`）
 - **`/zcode-patch-status` 补上遗漏**：原先只检查 8 项，新增的品牌名替换与窗口 ID 修复
