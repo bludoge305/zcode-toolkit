@@ -7,7 +7,7 @@ description: "[仅手动调用，禁止自动触发] ZCode 客户端本地补丁
 
 > 本 skill 由 **zcode-tokenspeed 插件**提供，脚本就在本 skill 目录下的 `scripts/`（下文所有 `<skill目录>` 均指本目录）。
 
-**先跑这一条**（只读，不改任何文件，一条命令看全部 8 项功能的状态）：
+**先跑这一条**（只读，不改任何文件，一条命令看全部 10 项功能的状态）：
 
 ```bash
 python "<skill目录>/scripts/zcode_patcher.py" --all --check
@@ -37,7 +37,7 @@ python "<skill目录>/scripts/doctor.py" --where  # 只查「插件装在哪」+
 界面上的表现都一样是「什么也没发生」。**最常见的卡点是「插件没启用」**。
 钩子是否真的执行过，看 `scripts/_sync.last` 心跳文件；不存在 = 钩子从未被调用。
 
-> **装完即用，不需要打开配置页。** 插件清单里 8 个开关的 `default` 全是 `true`，没保存过配置时> `sync.py` 就按这份默认值注入。ZCode 的插件清单**没有「安装时钩子」**——官方规范
+> **装完即用，不需要打开配置页。** 插件清单里 10 个开关的 `default` 全是 `true`，没保存过配置时> `sync.py` 就按这份默认值注入。ZCode 的插件清单**没有「安装时钩子」**——官方规范
 > `plugin-json-spec.md` 原文只允许声明 `skills` / `commands` / `hooks` / `mcpServers`
 > 四类组件（「Optional components: `skills` and `commands` point to directories; `hooks` points to
 > `hooks/hooks.json`; `mcpServers` can point to `.mcp.json` or contain the server configuration」），
@@ -88,9 +88,9 @@ python "<skill目录>/scripts/doctor.py" --where  # 只查「插件装在哪」+
 
 ### 插件开关（配置区）
 
-插件在 ZCode 的「设置 → 插件 → 已安装 → 点开插件 → 高级信息 → 配置」里声明了 8 个开关。**不拨也能用**：没保存过配置时按清单默认值（全开）注入。拨动开关并点「保存配置」后，插件会在**下次会话启动时登记期望状态**，再由 `apply_after_exit.py` 在 **ZCode 退出时写入**客户端（写完自动重启 ZCode），不需要手动跑命令（插件的安装方式见仓库 README 的「安装」章节）：
+插件在 ZCode 的「设置 → 插件 → 已安装 → 点开插件 → 高级信息 → 配置」里声明了 10 个开关。**不拨也能用**：没保存过配置时按清单默认值（全开）注入。拨动开关并点「保存配置」后，插件会在**下次会话启动时登记期望状态**，再由 `apply_after_exit.py` 在 **ZCode 退出时写入**客户端（写完自动重启 ZCode），不需要手动跑命令（插件的安装方式见仓库 README 的「安装」章节）：
 
-> **为什么八项一律等退出**：`zcode_patcher.py` 的运行预检是**全局**的 —— `zcode_running()` 只查
+> **为什么十项一律等退出**：`zcode_patcher.py` 的运行预检是**全局**的 —— `zcode_running()` 只查
 > `tasklist` 里有没有 `ZCode.exe`，与 target 无关，命中就直接 `return 2` 拒绝写入（app.asar 被锁、
 > `config.json` / `provider_config.json` 会被客户端回写覆盖）。而会话钩子**必然**在 ZCode 运行中触发，
 > 所以「会话内立即生效」这条路走不通。`sync.py` 的策略是**先试立即写，被拒就自动转交退出后看护**，
@@ -106,6 +106,8 @@ python "<skill目录>/scripts/doctor.py" --where  # 只查「插件装在哪」+
 | 增强提示词按钮 | `--enhance-prompt` | 开 | ZCode 退出时自动应用，**再启动**才生效（两次启停） |
 | 设置页模型拉取按钮 | `--model-puller` | 开 | ZCode 退出时自动应用，**再启动**才生效（两次启停） |
 | 思考档位内核补丁（旧版专用） | 无参数 | 开 | 仅 ≤3.11.2 需要；3.14+ 自动跳过并报「本版本不适用」 |
+| 品牌名替换 | `--display-name`（需 `--name`） | 开 | ZCode 退出时自动应用；**不指定名字时不改动任何内容**（保持原品牌名） |
+| 窗口 ID 缺陷修复 | `--window-id-fix` | 开 | ZCode 退出时自动应用；客户端无该缺陷时报「目标不存在（已修复）」，属正常 |
 
 行为约定（`scripts/sync.py`，由 SessionStart hook 调用）：
 
@@ -135,7 +137,7 @@ python "<skill目录>/scripts/doctor.py" --where  # 只查「插件装在哪」+
 - 日志与心跳：`scripts/_sync.log`（同步日志）、`scripts/_sync.last`（每次被调用都刷新，
   证明「钩子到底跑没跑」）。没找到配置时会记录 `config.json` 里 `plugins` 的实际键名。
 - 一键自检：`python scripts/doctor.py`（只读）——插件是否安装/启用、配置是否保存过、
-  钩子是否跑过、八项补丁状态，末尾直接给卡点结论。`--where` 只查安装位置，
+  钩子是否跑过、十项补丁状态，末尾直接给卡点结论。`--where` 只查安装位置，
   `--where-all` 连扫过的全部候选目录一起列（本机 120 个，默认只列命中项）。
 - **插件副本的三种落点**（判断「装没装」要**按清单里的 name 认**，不能靠目录名）：
   - `<数据>/cli/plugins/marketplaces/<市场 id>/` —— directory 来源；`source: "./"` 时**市场根即插件根**
@@ -225,7 +227,7 @@ python "<skill目录>/scripts/zcode_patcher.py" --model-puller
 > 也可以自己挂一条计划任务调用 `scripts/apply_after_exit.py`（它自行探测安装位置，
 > 退出后按期望状态应用补丁并重启 ZCode）；不需要时删掉该任务即可。
 
-八个补丁，均幂等、可检查、可还原、ZCode 升级后需重打：
+十个补丁，均幂等、可检查、可还原、ZCode 升级后需重打：
 
 | 能力 | 说法 | 命令 | 改哪里 |
 |---|---|---|---|
@@ -237,6 +239,12 @@ python "<skill目录>/scripts/zcode_patcher.py" --model-puller
 | 加宽模型弹窗 | 模型选择浮窗加宽，长模型名不再截断 | `python zcode_patcher.py --model-width [--check/--revert]` | app.asar 内主 bundle（同长度原地改字节） |
 | **增强提示词** | 输入框旁一键润色草稿（可恢复原文）；**右键**弹出菜单选择使用哪个模型 | `python zcode_patcher.py --enhance-prompt [--check/--revert]` | app.asar（重打包级：renderer 脚本 + index.html + preload 桥 + main IPC） |
 | 模型拉取按钮 | 设置页一键拉取/勾选模型 | `python zcode_patcher.py --model-puller [--check/--revert]` | app.asar（重打包级：renderer 脚本 + index.html + preload 桥 + main IPC） |
+| **品牌名替换** | 改界面左下角显示名（不传 `--name` 则保持原样） | `python zcode_patcher.py --display-name --name "<名字>" [--check/--revert]` | app.asar（重打包级：按表达式上下文定位并替换字面量） |
+| 窗口 ID 缺陷修复 | 修 ZCodium 1.0.2 的 `disposeWindow(browserWindowId)` 未定义变量 | `python zcode_patcher.py --window-id-fix [--check/--revert]` | app.asar（重打包级） |
+
+> **品牌名替换的语义**：不传 `--name` 时输出「未指定目标名，保持原样」，**不改动任何文件**——
+> 所以开关可以默认开启而不擅自改品牌名。用户要改名请走 `/zcode-patch-setdisplayname <名字>`，
+> 不带参数则保持 `ZCodium`。
 
 两个及以上功能可一次执行：`python zcode_patcher.py --usage-chart --model-width --tps-footer --thought-slider --model-puller`。
 全部功能一条命令：`python zcode_patcher.py --all [--check/--revert]`（等价于写全上表所有补丁参数 + 内核补丁）。
@@ -250,7 +258,7 @@ python "<skill目录>/scripts/zcode_patcher.py" --model-puller
 
 1. **定位安装**：脚本自动探测（运行中进程 → 注册表 → 常见目录，跨 Windows/macOS/Linux，见「跨平台约定」）；探测不到就把安装根目录作为位置参数传入（加 `--verbose` 看每一步探测结果）。
 2. **只读核实**（能否生效的判断，全部只读，可放心先跑）：
-   - `python zcode_patcher.py --all --check`：**一条命令看全部 8 项**（含客户端版本、8 行执行汇总表）。
+   - `python zcode_patcher.py --all --check`：**一条命令看全部 10 项**（含客户端版本、10 行执行汇总表）。
      用户问「现在什么状态」「装好了吗」时先跑这条；下面各条是单项细看。
    - `python zcode_patcher.py --reasoning-config --check`：**3.14.x 先看这个**——哪些模型已配档位、哪些缺档位、哪些已在界面手动配置过（冲突会跳过）。
    - `python zcode_patcher.py --check`：内核补丁状态；输出「原生档位机制（optionSpecs），本补丁不适用」即 3.14+，直接走上面的 `--reasoning-config`；≤3.11 且版本不在「已知符号表」时跑 `--extract`——能提取出锚点即可生效，提取失败说明内核结构变了，按「新版本锚点提取」人工分析后再动。

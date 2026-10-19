@@ -16,6 +16,8 @@ description: 逐项查看/切换 zcode-tokenspeed 的注入功能开关
 | `enhance_prompt` | 增强提示词按钮 | ZCode 退出时自动应用，再启动才生效 |
 | `model_puller` | 设置页模型拉取按钮 | ZCode 退出时自动应用，再启动才生效 |
 | `core_patch` | 思考档位内核补丁（仅 ≤3.11.2，3.14+ 请保持关闭） | ZCode 退出时自动应用，再启动才生效 |
+| `display_name` | 品牌名替换（默认开，但**不指定名字时不会改动任何内容**；改名字用 `/zcode-patch-setdisplayname <名字>`） | ZCode 退出时自动应用，再启动才生效 |
+| `window_id_fix` | 窗口 ID 缺陷修复（ZCodium 1.0.2 关窗报错） | ZCode 退出时自动应用，再启动才生效 |
 
 **流程**：
 
