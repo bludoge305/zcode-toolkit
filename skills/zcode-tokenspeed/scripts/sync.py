@@ -338,6 +338,11 @@ def check_state(args) -> str:
         return "off"
     if "已打" in out:
         return "on"
+    # 文本替换类补丁（品牌名 / 窗口 ID 修复）用 [=] 表达「目标状态已达成」，
+    # 措辞是「保持原样」「已是目标内容」「目标不存在」——都不含「已打」。
+    # 不识别它们会落到 unknown，run_sync 里 unknown 走 failed 分支（误报失败）。
+    if "[=]" in out and "失败 0" in out:
+        return "on"
     return "unknown"
 
 
