@@ -118,7 +118,13 @@ def _find_exe(res: Path) -> Path | None:
 
 
 def resolve_install() -> tuple[Path | None, Path | None]:
-    """复用主脚本的跨平台探测拿到 (asar 目录, ZCode 可执行文件)。"""
+    """复用主脚本的跨平台探测拿到 (asar 目录, 客户端可执行文件)。
+
+    ★ 这里曾是「看护等到退出却不重启」的根因：客户端退出后，运行时进程探测失效；
+    ZCodium 没有卸载注册表项、又装在 D:\\Apps 这类非标准目录，常规扫描全部落空，
+    于是 resolve_install() 返回 (None, None)，看护只记一行「未找到主程序」就退出了。
+    现在主脚本会缓存成功探测到的安装根（_from_cached_install），退出后仍能命中。
+    """
     try:
         zp = _import_patcher()
         for cjs in zp.discover():

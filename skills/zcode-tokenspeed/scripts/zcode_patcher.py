@@ -553,6 +553,53 @@ def _from_registry(found: list[Path]) -> None:
                         continue
 
 
+def _from_cached_install(found: list[Path]) -> None:
+    """0) 上次成功探测到的安装根目录（缓存）。
+
+    ★ 为什么必须有：客户端**退出后**，运行时进程探测（_from_running_processes）失效；
+    ZCodium 这类发行版又不写卸载注册表、且常装在 Program Files 之外（如 D:\\Apps\\ZCodium），
+    常规目录扫描也命中不了。于是看护在「等到退出 → 调 zcode_patcher」这一刻会报
+    「未找到 app.asar」，接着找不到主程序、不重启客户端 —— 这正是
+    「看护没有如预期重新拉起 ZCodium」的根因。
+    缓存写在数据目录（~/.zcode 或 ~/.zcodium）下，与客户端生命周期无关。
+    """
+    for p in _install_cache_paths():
+        try:
+            root = Path(p.read_text(encoding="utf-8").strip())
+        except Exception:
+            continue
+        if root.is_dir():
+            found.append(root)
+
+
+def _install_cache_paths() -> list[Path]:
+    """安装路径缓存的可能位置（按「该发行版是否真的在用」排序）。
+
+    判据是该数据目录下有没有 v2/ 或 cli/：ZCodium 用户不一定有 ~/.zcode，
+    反过来也一样。读取时两个位置都试，写入时优先落到真实在用的那个。
+    """
+    home = Path.home()
+    paths = [home / name / "zcode_install_path.txt" for name in data_dir_names()]
+
+    def _in_use(p: Path) -> int:
+        d = p.parent
+        return 0 if ((d / "v2").is_dir() or (d / "cli").is_dir()) else 1
+
+    return sorted(paths, key=_in_use)
+
+
+def _remember_install(cjs: Path) -> None:
+    """把探测成功的安装根目录写进缓存，供客户端退出后使用。失败静默——缓存只是加速。"""
+    root = cjs.parent.parent.parent          # <root>/resources/glm/zcode.cjs -> <root>
+    for p in _install_cache_paths():
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(str(root), encoding="utf-8")
+            return
+        except Exception:
+            continue
+
+
 def _from_common_dirs(found: list[Path]) -> None:
     """3) 常规安装目录：Windows Program Files 系 / macOS /Applications / Linux /opt、/usr/share"""
     bases = [os.environ.get("ProgramFiles"),
@@ -582,10 +629,39 @@ def _from_common_dirs(found: list[Path]) -> None:
             continue
 
 
+def _from_custom_dirs(found: list[Path]) -> None:
+    """4) 常见「自定义安装根」的浅层扫描（非 Program Files 的盘符目录）。
+
+    ZCodium 实测装在 D:\\Apps\\ZCodium：既没有卸载注册表项，也不在任何标准
+    Program Files 目录下，只有这一层浅扫能命中。只扫一层、只认精确的客户端目录名，
+    不会递归全盘（那会把启动拖到几十秒）。
+    """
+    if os.name != "nt":
+        return
+    bases: list[str] = []
+    for letter in "CDEFGH":
+        bases += [f"{letter}:\\Apps", f"{letter}:\\Program Files", f"{letter}:\\Tools"]
+    for base in bases:
+        try:
+            if not Path(base).is_dir():
+                continue
+            for entry in os.scandir(base):
+                if entry.is_dir() and _is_client_name(entry.name):
+                    found.append(Path(entry.path))
+        except OSError:
+            continue
+
+
 def discover() -> list[Path]:
-    """返回所有探测到的 zcode.cjs（去重、保序）"""
+    """返回所有探测到的 zcode.cjs（去重、保序）
+
+    探测顺序：缓存 → 运行中进程 → 注册表 → 标准目录 → 自定义目录浅扫。
+    缓存排第一是因为客户端**退出后**只有它稳定可用（见 _from_cached_install）。
+    """
     roots: list[Path] = []
-    for probe in (_from_running_processes, _from_registry, _from_common_dirs):
+    probes = (_from_cached_install, _from_running_processes, _from_registry,
+              _from_common_dirs, _from_custom_dirs)
+    for probe in probes:
         before = len(roots)
         try:
             probe(roots)
@@ -606,6 +682,8 @@ def discover() -> list[Path]:
         if cjs.is_file() and key not in seen:
             seen.add(key)
             result.append(cjs)
+    if result:
+        _remember_install(result[0])      # 供「客户端已退出」的看护场景复用
     return result
 
 

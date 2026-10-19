@@ -1,7 +1,7 @@
 # zcode-tokenspeed · ZCode 客户端一站式原生增强套件
 
 <p align="left">
-  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.21-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.22-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -163,6 +163,16 @@ run.cmd                        # Windows
 - **语义修正为“不托管”**：3.14+ 思考档位配置目标为客户端自带的 `provider_config.json`；当开关关闭时语义明确为“停止托管与同步”，插件不再主动写入，且绝不主动还原该文件，彻底切断“退出还原 → 客户端重启写回 → 再次检测冲突 → 再次看护还原”的无限死循环；
 - **看护空任务守卫**：`apply_after_exit.py` 严格过滤 `reasoning_config=off` 任务；若最终无待执行补丁任务，看护直接安全退出，杜绝空任务挂起等待与退出自动重启 ZCode。
 - **全平台兼容吸收**：完整吸纳 PR #4 对 macOS 看护链路的跨平台支持与 crashpad 僵尸进程排除。
+
+#### 0.6.22（修好看护「等到退出却不重启客户端」）
+- **安装路径持久化缓存**：新增 `_from_cached_install`，客户端成功探测后把安装根写进
+  `<数据目录>/zcode_install_path.txt`。此前看护在**客户端退出后**调用 `zcode_patcher.py` 时，
+  运行时进程探测已失效，而 ZCodium 既无卸载注册表项、又常装在 `D:\Apps` 这类非标准目录，
+  于是报「未找到 app.asar」→ 找不到主程序 → 不重启，表现为「退出后什么也没发生」；
+- **自定义安装目录浅扫**：新增 `_from_custom_dirs`，扫描 `C:–H:\Apps`、`Tools`、
+  `Program Files` 等常见自定义根（只扫一层、只认精确目录名，不递归全盘）；
+- **重启链路加固**：`apply_after_exit.resolve_install()` 依赖上述两条兜底，
+  客户端退出后仍能定位 asar 与 `ZCodium.exe`，恢复「写入 → 自动拉起」的闭环。
 
 #### 0.6.21（支持 ZCodium 发行版：修好「装了但完全没反应」）
 - **客户端身份识别层**：新增 `DATA_DIR_NAMES = (".zcode", ".zcodium")` 与 `PROCESS_NAMES = ("ZCode.exe", "ZCodium.exe")`，安装探测、运行守卫、数据根解析全部改走统一的 `_is_client_name()`。此前三处都硬编码原版 ZCode 特征，而 `"zcode" in "zcodium"` 恰好不成立，导致三个探测器在 ZCodium 上全部命中 0 个候选目录，脚本直接报「未找到 app.asar」——界面上表现得就像什么都没装；
