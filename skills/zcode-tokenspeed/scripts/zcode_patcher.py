@@ -1718,22 +1718,52 @@ let req=mod.request(cur,{method:"POST",headers:Object.assign({},curHeaders,{"Con
 let b="";r2.on("data",c=>b+=c);
 r2.on("end",()=>{
 if(r2.statusCode>=200&&r2.statusCode<300){try{
-let j=JSON.parse(b),out="";
-if(j&&j.choices&&j.choices[0]){
-let m0=j.choices[0].message||{};
-if(typeof m0.content==="string")out=m0.content;
-else if(Array.isArray(m0.content))out=m0.content.map(c=>String((c&&c.text)||c||"")).join("");
-if(!out&&typeof j.choices[0].text==="string")out=j.choices[0].text;
-if(!out&&typeof m0.reasoning_content==="string"&&m0.reasoning_content.trim())out=m0.reasoning_content.trim()}
-if(!out&&j&&Array.isArray(j.content))out=j.content.map(function(c){return String((c&&c.text)||c||"")}).join("");
-if(!out&&j&&typeof j.output_text==="string")out=j.output_text;
+let root=null;
+try{root=JSON.parse(b)}catch(sseErr){
+if(typeof b==="string"&&(b.indexOf("data:")!==-1||b.indexOf("data: ")!==-1)){
+let sse="";
+for(let line of b.split(String.fromCharCode(10))){let tr=line.trim();
+if(tr.indexOf("data:")===0&&tr.indexOf("[DONE]")===-1){
+try{let c=JSON.parse(tr.slice(5).trim());
+let del=(c&&c.choices&&c.choices[0]&&(c.choices[0].delta||c.choices[0].message)&&(c.choices[0].delta||c.choices[0].message).content)||"";
+if(typeof del==="string")sse+=del}catch(_){}}}
+if(sse.trim())root={choices:[{message:{content:sse.trim()}}]}}
+if(!root)throw sseErr}
+for(let d=0;d<3;d++){
+if(root&&typeof root==="object"&&!Array.isArray(root)){
+if(root.data&&typeof root.data==="object"&&!Array.isArray(root.data))root=root.data;
+else if(root.result&&typeof root.result==="object"&&!Array.isArray(root.result))root=root.result;
+else if(root.response&&typeof root.response==="object"&&!Array.isArray(root.response))root=root.response;
+else break}}
+let out="";
+if(root&&Array.isArray(root.choices)&&root.choices[0]){
+let c0=root.choices[0],m0=c0.message||c0.delta||{};
+if(typeof m0.content==="string"&&m0.content.trim())out=m0.content;
+else if(Array.isArray(m0.content))out=m0.content.map(c=>typeof c==="string"?c:((c&&typeof c.text==="string")?c.text:"")).join("");
+if(!out&&typeof c0.text==="string"&&c0.text.trim())out=c0.text;
+if(!out){
+let think=m0.reasoning_content||m0.reasoning||m0.thought||m0.thinking||m0.reasoningText;
+if(typeof think==="string"&&think.trim())out=think.trim()}}
+if(!out&&root&&Array.isArray(root.content)){
+let tb=[],thb=[];
+for(let item of root.content){if(!item)continue;
+if(typeof item==="string")tb.push(item);
+else if(item.type==="text"&&typeof item.text==="string")tb.push(item.text);
+else if(typeof item.text==="string"&&!item.type)tb.push(item.text);
+else if(item.type==="thinking"||item.thinking)thb.push(String(item.thinking||""))}
+out=tb.length?tb.join(""):thb.join("")}
+if(!out&&root){
+if(typeof root.output_text==="string")out=root.output_text;
+else if(root.output&&typeof root.output.text==="string")out=root.output.text;
+else if(Array.isArray(root.generations)&&root.generations[0]&&typeof root.generations[0].text==="string")out=root.generations[0].text;
+else if(typeof root.reply==="string")out=root.reply}
 out=String(out||"").trim();
 if(out.indexOf("```")===0){let idx=out.indexOf(String.fromCharCode(10));if(idx>0){let last=out.lastIndexOf("```");if(last>idx)out=out.slice(idx+1,last).trim()}}
 if(out)return resolve({success:!0,text:out,model:curPick.mid,provider:curPick.pid,how:String(curPick.how||"")});
 return resolve({success:!1,code:"empty-reply",error:"模型返回了空内容（HTTP "+r2.statusCode+"）"});
 }catch(perr){return resolve({success:!1,code:"parse",error:"响应解析失败："+String(perr)})}}
 let msg="";
-try{let j=JSON.parse(b);msg=(j&&(j.error&&(j.error.message||j.error)||j.message))||""}catch(_){msg=b.slice(0,200)}
+try{let j=JSON.parse(b);let er=j&&(j.error||(j.data&&j.data.error));msg=(er&&(er.message||er))||j.message||""}catch(_){msg=b.slice(0,200)}
 return resolve({success:!1,code:"http",status:r2.statusCode,error:"HTTP "+r2.statusCode+(msg?("："+String(msg)):"")})})});
 req.on("error",err=>resolve({success:!1,code:"network",error:"请求失败："+String(err&&err.message||err)}));
 req.on("timeout",()=>{req.destroy();resolve({success:!1,code:"timeout",error:"请求超时（60 秒）"})});

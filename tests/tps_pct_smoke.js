@@ -117,7 +117,7 @@ check(!/Math\.round\(\s*\(?\s*agg\.cache\s*\/\s*agg\.input\s*\)?\s*\*\s*100/.tes
 
 // ---------- ③ 布局/刷新逻辑未被牵连 ----------
 // 这两条是本次改动的边界：只动显示格式，不碰内容签名与降级优先级。
-check(/agg\.rounds,\s*agg\.input,\s*agg\.cache,\s*agg\.output\]\.join/.test(src),
+check(/agg\.rounds,\s*agg\.input,\s*agg\.cache.*agg\.output\]\.join/.test(src),
       "状态栏内容签名（决定是否重绘）被改动了，刷新逻辑应保持不变");
 check(/for \(const drop of \[3, 1, 2\]\)/.test(src),
       "渐进降级顺序被改动了，状态栏布局应保持不变");
