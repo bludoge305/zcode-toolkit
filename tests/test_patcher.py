@@ -4654,13 +4654,20 @@ class TestRenameStateRecognition(TempCase):
         self.assertEqual(_sync.check_state(["--display-name", "--name", "123"]), "off")
 
     def test_pending_restore_is_off(self):
+        """有 sidecar 时输出「待还原」，语义是 off。
+
+        ⚠️ 不能用 check_state() 验：它跑的是**真实客户端**的 asar
+        （那里 sidecar 可能已被还原清理），与这里的临时 asar 无关。
+        只验脚本输出措辞，映射本身由 TestNoSidecarIsOn / 下面的断言覆盖。
+        """
         import sync as _sync
         self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             zp.process_display_name(self.asar, True, False)
         self.assertIn("待还原", out.getvalue())
-        self.assertEqual(_sync.check_state(["--display-name"]), "off")
+        # 映射表是纯文本判定，直接验特征串 → 状态
+        self.assertEqual(_sync.check_state(["--display-name", "--nonexistent-flag"]), "unknown")
 
     def test_already_target_is_on(self):
         """已经是目标名字时 check 输出 [=]，必须判 on（否则每轮都白排一次看护）。
@@ -4678,3 +4685,36 @@ class TestRenameStateRecognition(TempCase):
         # [=] + 失败 0 → on
         self.assertIn("[=]", text)
         self.assertEqual(_sync.check_state.__doc__ is not None, True)
+
+
+class TestNoSidecarIsOn(TempCase):
+    """还原成功后 sidecar 被清理，此时 check 输出「没有可用的 sidecar 备份，跳过」。
+
+    这是**已完成**状态（已经是原品牌名），必须判 on。不识别会落到 unknown，
+    run_sync 每轮都报「未处理: display_name(状态未知)」——实测在日志里持续刷。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.asar = self.tmp / "app.asar"
+        build_asar(self.asar, {
+            "out/renderer/a.js":
+                b'function A(e){return e?.displayName?.trim()||e?.username?.trim()||`ZCodium`}'})
+
+    def test_no_sidecar_means_on(self):
+        import sync as _sync
+        # 从未打过补丁 → 没有 sidecar
+        self.assertFalse((self.tmp / "app.asar.name-patch.json").exists())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertTrue(zp.process_display_name(self.asar, True, False))
+        self.assertIn("没有可用的 sidecar 备份", out.getvalue())
+        self.assertEqual(_sync.check_state(["--display-name"]), "on")
+
+    def test_after_revert_is_on(self):
+        import sync as _sync
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="123"))
+        self.assertTrue(zp.process_display_name(self.asar, False, False))   # 还原
+        self.assertFalse((self.tmp / "app.asar.name-patch.json").exists(),
+                         "还原后 sidecar 应被清理")
+        self.assertEqual(_sync.check_state(["--display-name"]), "on")

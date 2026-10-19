@@ -1,7 +1,7 @@
 # zcode-tokenspeed · ZCode 客户端一站式原生增强套件
 
 <p align="left">
-  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.33-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.34-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -165,6 +165,14 @@ run.cmd                        # Windows
 - **语义修正为“不托管”**：3.14+ 思考档位配置目标为客户端自带的 `provider_config.json`；当开关关闭时语义明确为“停止托管与同步”，插件不再主动写入，且绝不主动还原该文件，彻底切断“退出还原 → 客户端重启写回 → 再次检测冲突 → 再次看护还原”的无限死循环；
 - **看护空任务守卫**：`apply_after_exit.py` 严格过滤 `reasoning_config=off` 任务；若最终无待执行补丁任务，看护直接安全退出，杜绝空任务挂起等待与退出自动重启 ZCode。
 - **全平台兼容吸收**：完整吸纳 PR #4 对 macOS 看护链路的跨平台支持与 crashpad 僵尸进程排除。
+
+#### 0.6.34（修好还原成功后持续报「状态未知」）
+- **`check_state()` 补上「没有可用的 sidecar 备份」→ `on`**：还原成功后 sidecar 会被清理，
+  此时脚本输出「没有可用的 sidecar 备份，跳过」并返回成功——这是**已完成**状态。
+  不识别会落到 `unknown`，`run_sync` 每轮都报「未处理: display_name(状态未知)」，
+  在 `_sync.log` 里持续刷；
+- 至此 `display_name` 的四种输出全部有确定映射：
+  「待写入」/「待还原」→ `off`、「已是目标内容」/「没有可用的 sidecar 备份」→ `on`。
 
 #### 0.6.33（修好改名请求被静默忽略）
 - **`check_state()` 补上「待写入」→ `off`**：改名模式的输出是「待写入 N 个文件」，

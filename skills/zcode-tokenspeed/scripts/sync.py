@@ -394,6 +394,14 @@ def check_state(args) -> str:
     # run_sync 报「状态未知」，补丁永远不会被排期（实测踩过）。
     if "待写入" in out:
         return "off"
+    # 还原模式下没有 sidecar = 从未打过改名补丁 = 已经是原品牌名。
+    # 脚本输出「没有可用的 sidecar 备份，跳过」并返回成功，这是**已完成**状态。
+    # 不识别会落到 unknown → run_sync 报「状态未知」，每轮同步都白报一次失败
+    # （实测：还原成功、sidecar 清理之后，日志持续出现「未处理: display_name(状态未知)」）。
+    if "没有可用的 sidecar 备份" in out:
+        return "on"
+    if "没有当前版本的 sidecar 备份" in out:
+        return "on"
     # 文本替换类补丁（品牌名 / 窗口 ID 修复）用 [=] 表达「目标状态已达成」，
     # 措辞是「保持原样」「已是目标内容」「目标不存在」——都不含「已打」。
     # 不识别它们会落到 unknown，run_sync 里 unknown 走 failed 分支（误报失败）。
