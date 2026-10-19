@@ -45,7 +45,7 @@
   const MENU_ID = "zenhance-model-menu";
   const STYLE_ID = "zenhance-style";
   const diag = (window.__zenhanceDiag = window.__zenhanceDiag || {});
-  diag.scriptVersion = "1.8";
+  diag.scriptVersion = "1.9";
 
   const TIP_IDLE = "增强提示词（右键选择模型）";
   const TIP_BUSY = "增强中…";
@@ -53,6 +53,7 @@
   const REVERT_WINDOW_MS = 20000;
 
   const COMPOSER_INPUT_SELECTORS = [
+    "[data-lexical-editor='true']",
     "[data-testid='v4-composer-input']",
     "[data-testid*='composer-input']",
     "textarea[data-testid]",
@@ -459,53 +460,288 @@
     return null;
   }
 
+  function resolveEditorTarget(el) {
+    if (!el) return null;
+    try {
+      if (el.hasAttribute && (el.hasAttribute("data-lexical-editor") || el.getAttribute("contenteditable") === "true")) {
+        return el;
+      }
+      if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
+        return el;
+      }
+      const inner = el.querySelector && el.querySelector("[data-lexical-editor='true'], [contenteditable='true'], textarea, input");
+      if (inner) return inner;
+    } catch (_) {}
+    return el;
+  }
+
+  function findEditorApiFromFiber(el) {
+    if (!el) return null;
+    try {
+      let curr = null;
+      for (const k of Object.keys(el)) {
+        if (k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$")) {
+          curr = el[k];
+          break;
+        }
+      }
+      let depth = 0;
+      while (curr && depth < 20) {
+        const props = curr.memoizedProps;
+        if (props) {
+          const api = props.editorApiRef?.current || props.inputApiRef?.current || props.editorApi;
+          if (api && typeof api.setText === "function") {
+            return api;
+          }
+        }
+        curr = curr.return;
+        depth++;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function findLexicalEditor(el) {
+    if (!el) return null;
+    try {
+      if (el.__lexicalEditor) return el.__lexicalEditor;
+      const closest = el.closest && el.closest("[data-lexical-editor='true'], [contenteditable='true']");
+      if (closest && closest.__lexicalEditor) return closest.__lexicalEditor;
+      const inner = el.querySelector && el.querySelector("[data-lexical-editor='true'], [contenteditable='true']");
+      if (inner && inner.__lexicalEditor) return inner.__lexicalEditor;
+    } catch (_) {}
+    return null;
+  }
+
+  function buildLexicalStateJson(text) {
+    const lines = String(text || "").split("\n");
+    const paragraphs = lines.map((line) => {
+      return {
+        type: "paragraph",
+        format: "",
+        indent: 0,
+        version: 1,
+        direction: "ltr",
+        textFormat: 0,
+        textStyle: "",
+        children: line ? [
+          {
+            type: "text",
+            text: line,
+            format: 0,
+            detail: 0,
+            mode: "normal",
+            style: "",
+            version: 1,
+          }
+        ] : []
+      };
+    });
+    return {
+      root: {
+        type: "root",
+        format: "",
+        indent: 0,
+        version: 1,
+        direction: "ltr",
+        children: paragraphs.length > 0 ? paragraphs : [
+          {
+            type: "paragraph",
+            format: "",
+            indent: 0,
+            version: 1,
+            direction: "ltr",
+            textFormat: 0,
+            textStyle: "",
+            children: []
+          }
+        ]
+      }
+    };
+  }
+
   function readText(el) {
     if (!el) return "";
-    if (typeof el.value === "string") return el.value;
-    const txt = (typeof el.innerText === "string" && el.innerText.trim())
-      ? el.innerText
-      : (el.textContent || "");
+    const target = resolveEditorTarget(el);
+    if (!target) return "";
+
+    // ① 优先从 React Fiber 的 editorApiRef 取（100% 官方模型状态）
+    const api = findEditorApiFromFiber(target);
+    if (api) {
+      try {
+        if (typeof api.getMarkdown === "function") {
+          const md = api.getMarkdown();
+          if (typeof md === "string" && md.trim()) return md.replace(/\u200B/g, "");
+        }
+        if (typeof api.getText === "function") {
+          const txt = api.getText();
+          if (typeof txt === "string" && txt.trim()) return txt.replace(/\u200B/g, "");
+        }
+      } catch (_) {}
+    }
+
+    // ② 仅对原生 textarea / input 读取 value
+    const isFormInput = target.tagName === "TEXTAREA" || target.tagName === "INPUT";
+    if (isFormInput && typeof target.value === "string") return target.value;
+
+    // ③ 尝试从 Lexical Editor 状态直接读取
+    const editor = findLexicalEditor(target);
+    if (editor && typeof editor.getEditorState === "function") {
+      try {
+        const es = editor.getEditorState();
+        if (es && typeof es.read === "function") {
+          let textResult = null;
+          es.read(() => {
+            try {
+              const root = typeof editor.getRootElement === "function" ? editor.getRootElement() : null;
+              if (root && (root.innerText || root.textContent)) {
+                textResult = root.innerText || root.textContent;
+              }
+            } catch (_) {}
+          });
+          if (typeof textResult === "string" && textResult.trim()) {
+            return textResult.replace(/\u200B/g, "");
+          }
+        }
+      } catch (_) {}
+    }
+
+    // ④ DOM 文本兜底
+    const txt = (typeof target.innerText === "string" && target.innerText.trim())
+      ? target.innerText
+      : (target.textContent || "");
     return txt.replace(/\u200B/g, "");
   }
 
-  /** 写回受控输入框：优先 execCommand('insertText')（textarea 与 contenteditable 都能触发
-   *  React 受控更新），失败退回「原生 setter + input/beforeinput/change 事件链」。 */
+  function verifyWritten(target, expectedText) {
+    const cur = readText(target).trim();
+    const exp = String(expectedText || "").trim();
+    if (!exp) return !cur;
+    if (cur === exp) return true;
+    const prefix = exp.slice(0, Math.min(25, exp.length));
+    if (prefix && cur.startsWith(prefix)) return true;
+    if (Math.abs(cur.length - exp.length) <= Math.max(6, exp.length * 0.05)) {
+      const head = exp.slice(0, 12);
+      if (head && cur.includes(head)) return true;
+    }
+    return false;
+  }
+
+  /** 写回受控输入框：
+   *  阶梯 1: React Fiber 探针直调官方 editorApiRef.setText（最稳健，直接触发原生 updateListener）
+   *  阶梯 2: Lexical 官方原生 parseEditorState + setEditorState（直接进入 Lexical 受控循环）
+   *  阶梯 3: 模拟 ClipboardEvent('paste') 剪贴板事件（触发原生富文本粘贴链路）
+   *  阶梯 4: document.execCommand('insertText') + 事件派发
+   *  阶梯 5: 原生 Setter + input/beforeinput/change 事件链兜底
+   *  全流程包含 verifyWritten 自检，杜绝假成功。 */
   function writeText(el, text) {
     if (!el) return false;
-    try { el.focus(); } catch (err) { /* ignore */ }
+    const target = resolveEditorTarget(el);
+    if (!target) return false;
+
+    try { target.focus(); } catch (_) {}
+
+    // ★ 策略 1：React Fiber 直调官方暴露的 editorApiRef.setText
+    const api = findEditorApiFromFiber(target);
+    if (api && typeof api.setText === "function") {
+      try {
+        api.setText(text);
+        try { api.focus?.(); } catch (_) {}
+        if (verifyWritten(target, text)) {
+          diag.lastWriteMethod = "fiber-editor-api";
+          return true;
+        }
+      } catch (err) {
+        /* 落到下级策略 */
+      }
+    }
+
+    // ★ 策略 2：Lexical 原生 parseEditorState + setEditorState
+    const editor = findLexicalEditor(target);
+    if (editor && typeof editor.parseEditorState === "function" && typeof editor.setEditorState === "function") {
+      try {
+        const jsonState = buildLexicalStateJson(text);
+        const parsed = editor.parseEditorState(JSON.stringify(jsonState));
+        editor.setEditorState(parsed);
+        try { editor.focus(); } catch (_) {}
+        if (verifyWritten(target, text)) {
+          diag.lastWriteMethod = "lexical-parse-state";
+          return true;
+        }
+      } catch (err) {
+        /* 落到下级策略 */
+      }
+    }
+
+    // ★ 策略 3：标准剪贴板粘贴回退（合成 ClipboardEvent('paste')）
     try {
-      if (typeof el.select === "function") {
-        el.select();
-      } else if (typeof el.setSelectionRange === "function") {
-        el.setSelectionRange(0, readText(el).length);
-      } else {
+      if (typeof window !== "undefined" && window.getSelection) {
         const range = document.createRange();
-        range.selectNodeContents(el);
+        range.selectNodeContents(target);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+
+        if (typeof DataTransfer !== "undefined" && typeof ClipboardEvent !== "undefined") {
+          const dt = new DataTransfer();
+          dt.setData("text/plain", text);
+          const pasteEvt = new ClipboardEvent("paste", {
+            clipboardData: dt,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+          });
+          target.dispatchEvent(pasteEvt);
+          if (verifyWritten(target, text)) {
+            diag.lastWriteMethod = "clipboard-paste";
+            return true;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // ★ 策略 4：document.execCommand('insertText') + 选区
+    try {
+      if (typeof target.select === "function") {
+        target.select();
+      } else if (typeof target.setSelectionRange === "function") {
+        target.setSelectionRange(0, readText(target).length);
+      } else if (typeof window !== "undefined" && window.getSelection) {
+        const range = document.createRange();
+        range.selectNodeContents(target);
         const sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(range);
       }
       if (document.execCommand && document.execCommand("insertText", false, text)) {
-        return true;
+        if (verifyWritten(target, text)) {
+          diag.lastWriteMethod = "execCommand";
+          return true;
+        }
       }
-    } catch (err) { /* 落到兜底 */ }
+    } catch (_) {}
 
+    // ★ 策略 5：原生 Setter 与 DOM 事件链（textarea / input / 普通 contenteditable 兜底）
     try {
-      const proto = el instanceof HTMLTextAreaElement
-        ? HTMLTextAreaElement.prototype
-        : (el instanceof HTMLInputElement ? HTMLInputElement.prototype : null);
+      const isTextArea = target.tagName === "TEXTAREA";
+      const isInput = target.tagName === "INPUT";
+      const proto = isTextArea
+        ? (typeof HTMLTextAreaElement !== "undefined" ? HTMLTextAreaElement.prototype : null)
+        : (isInput ? (typeof HTMLInputElement !== "undefined" ? HTMLInputElement.prototype : null) : null);
       const setter = proto && Object.getOwnPropertyDescriptor(proto, "value")?.set;
       if (setter) {
-        setter.call(el, text);
+        setter.call(target, text);
+      } else if ("value" in target) {
+        target.value = text;
       } else {
-        el.textContent = text;
+        target.textContent = text;
       }
       try {
-        if (el._valueTracker) el._valueTracker.setValue(text);
+        if (target._valueTracker) target._valueTracker.setValue(text);
       } catch (_) {}
 
       try {
-        el.dispatchEvent(new InputEvent("beforeinput", {
+        target.dispatchEvent(new InputEvent("beforeinput", {
           bubbles: true,
           cancelable: true,
           inputType: "insertText",
@@ -514,20 +750,34 @@
       } catch (_) {}
 
       try {
-        el.dispatchEvent(new InputEvent("input", {
+        target.dispatchEvent(new InputEvent("input", {
           bubbles: true,
           inputType: "insertText",
           data: text
         }));
       } catch (_) {
-        try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
+        try { target.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
       }
-      try { el.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+      try { target.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+
+      if (verifyWritten(target, text)) {
+        diag.lastWriteMethod = "setter-input-event";
+        return true;
+      }
+    } catch (_) {}
+
+    // ★ 最终宽限校验：若界面内容确实已被更新为预期文本，返回成功
+    if (verifyWritten(target, text)) {
+      diag.lastWriteMethod = "relaxed-pass";
       return true;
-    } catch (err) {
-      return false;
     }
+
+    return false;
   }
+
+  diag.writeText = writeText;
+  diag.readText = readText;
+  diag.findInput = findInput;
 
   /** 当前选中的模型：模型按钮就挂在 composer 工具栏上，因此先锚定 dock 再找
    *  [data-model-current-value]（形如 providerId/modelId）。
