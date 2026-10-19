@@ -193,6 +193,9 @@ ALL_PATCH_FLAGS = (
 # 把最后的 `ZCodium` 换成用户指定的名字。写成写死的偏移必然随版本失效，
 # 因此按**表达式上下文**定位，并准备多级兜底（压缩器可能重排或拆分表达式）。
 DEFAULT_DISPLAY_NAME = "Bludoge"
+#: 无参时的目标名。**不是**「asar 里的原值」——原值由发行版决定
+#: （ZCodium 1.0.2 实测是 Bludoge），用户无参执行的期望是看到 ZCodium。
+DEFAULT_DISPLAY_TARGET = "ZCodium"
 DEFAULT_BRANDS = ("ZCodium", "ZCode", "ZCode Desktop")
 SCRIPT_EXTS = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".html", ".htm"}
 
@@ -991,6 +994,23 @@ def _find_display_name_spans(raw: bytes, data_start: int, header: dict):
     return []
 
 
+def _describe_current_literal(spans) -> str:
+    """把当前命中的字面量汇总成一句可读文本（用于 --check 报告）。
+
+    用户经常问「现在界面到底是什么名字」——只报「已是目标内容 / 待写入」
+    答不了这个问题，而直接读 asar 又太麻烦。这里把命中的原文一并给出。
+    """
+    try:
+        vals = sorted({lit.decode("utf-8", "replace") for _p, _o, _l, lit in spans})
+    except Exception:
+        return ""
+    if not vals:
+        return ""
+    if len(vals) == 1:
+        return vals[0]
+    return "、".join(vals[:5]) + ("…" if len(vals) > 5 else "")
+
+
 def _apply_span_replacements(blob: bytes, spans) -> bytes:
     """按偏移倒序替换（倒序保证前面的偏移不被后面的长度变化影响）。"""
     out = bytearray(blob)
@@ -1032,14 +1052,20 @@ def _process_asar_text_patch(asar: Path, check_only: bool, revert: bool, *,
         live_paths = {p for p, _ in _asar_walk_entries(header)}
         saved = [r for r in saved if r.get("path") in live_paths]
         if not saved:
-            print(f"[.] {asar}\n    {label}: 没有可用的 sidecar 备份，跳过")
+            cur = _describe_current_literal(_find_display_name_spans(raw, data_start, header)) \
+                if side_suffix == ".name-patch.json" else ""
+            print(f"[.] {asar}\n    {label}: 没有可用的 sidecar 备份，跳过"
+                  + (f"（当前值：{cur}，即客户端原样）" if cur else ""))
             return True
         if dry_run:
             print(f"[~] {asar}\n    {label}: 将还原 {len(saved)} 个文件")
             return True
         if check_only:
             # --check 是只读的：这里必须拦住，否则「体检」会真的改写 asar
-            print(f"    [ ] {_short(asar)} | {label}: 待还原 {len(saved)} 个文件")
+            cur = _describe_current_literal(_find_display_name_spans(raw, data_start, header)) \
+                if side_suffix == ".name-patch.json" else ""
+            print(f"    [ ] {_short(asar)} | {label}: 待还原 {len(saved)} 个文件"
+                  + (f"（当前值：{cur}）" if cur else ""))
             return True
         overwrite = {r["path"]: base64.b64decode(r["original_b64"]) for r in saved}
         _repack_asar(asar, overwrite, set())
@@ -1072,12 +1098,16 @@ def _process_asar_text_patch(asar: Path, check_only: bool, revert: bool, *,
 
     # 已经全部是目标内容 → 幂等跳过（但补 sidecar，保证还能还原）
     if not overwrite:
-        print(f"    [=] {_short(asar)} | {label}: 已是目标内容，跳过")
+        cur = _describe_current_literal(spans)
+        print(f"    [=] {_short(asar)} | {label}: 已是目标内容，跳过"
+              + (f"（当前值：{cur}）" if cur else ""))
         return True
 
     if check_only:
+        cur = _describe_current_literal(spans)
         for path in overwrite:
-            print(f"    [ ] {_short(path)} | {label}: 待写入")
+            print(f"    [ ] {_short(path)} | {label}: 待写入"
+                  + (f"（当前值：{cur}）" if cur else ""))
         return True
 
     if dry_run:
@@ -1112,15 +1142,20 @@ def process_display_name(asar: Path, check_only: bool, revert: bool, *,
                          dry_run: bool = False) -> bool:
     """把渲染层的显示名兜底字面量换成 name。
 
-    **name=None 等价于「还原成原品牌名」**（与 --revert 同义）：
-    用户跑 `/zcode-patch-setdisplayname` 不带参数时，期望看到的就是恢复 ZCodium，
-    而不是「保持当前（可能已被改过的）名字」。早期把 None 当成「保持原样」，
-    结果是改过名字后再无参执行什么也不会发生——与用户直觉相反。
+    **name=None 等价于「强制写回 ZCodium」**：
+    用户跑 `/zcode-patch-setdisplayname` 不带参数时，期望就是看到 `ZCodium`，
+    而不是「恢复 asar 里原本的字面量」——后者由发行版决定，本机 ZCodium 1.0.2
+    实际是 `Bludoge`，还原出来仍不是用户要的 ZCodium。
 
-    命令行想「什么都不做」时应显式跳过该补丁，而不是靠省略 --name 表达。
+    `revert=True` 仍走 sidecar 还原（回到打补丁前的字节），
+    这是给「精确撤销」用的，与无参语义不同。
     """
+    if name is None and not revert:
+        # 无参 = 强制写回 ZCodium（不依赖 sidecar / 发行版原值）
+        name = DEFAULT_DISPLAY_TARGET
+
     if name is None:
-        # 无参 = 还原成原品牌名。sidecar 里存的就是原始字面量，走通用还原分支。
+        # 仅 revert 路径会到这里：从 sidecar 还原原始字节。
         # ⚠️ 必须把 check_only/dry_run 原样传下去：否则 `--check` 会真的去写盘。
         return _process_asar_text_patch(
             asar, check_only, True,

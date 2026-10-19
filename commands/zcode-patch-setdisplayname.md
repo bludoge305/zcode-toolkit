@@ -1,5 +1,5 @@
 ---
-description: 设置 ZCodium 界面左下角显示的名称；不带参数则还原为 ZCodium
+description: 设置 ZCodium 界面左下角显示的名称；不带参数则强制还原为 ZCodium
 ---
 
 加载本插件自带的 `zcode-tokenspeed` 技能（`${CLAUDE_PLUGIN_ROOT}/skills/zcode-tokenspeed/SKILL.md`；若该变量未展开，就按插件安装目录下的同名路径读取），然后按下述流程修改界面显示名称。
@@ -9,9 +9,11 @@ description: 设置 ZCodium 界面左下角显示的名称；不带参数则还�
 | 命令 | 效果 |
 |---|---|
 | `/zcode-patch-setdisplayname Bludoge` | 把显示名改成 `Bludoge` |
-| `/zcode-patch-setdisplayname` | **还原为 `ZCodium`**（撤掉已改的名字，恢复客户端原样） |
+| `/zcode-patch-setdisplayname` | **强制还原为 `ZCodium`**（写死目标，不依赖原值） |
 
-> 无参 = 还原，不是「什么都不做」。用户改过名字后再无参执行，期望看到的就是恢复 ZCodium。
+> 无参 = **强制写回 `ZCodium`**（不是恢复 asar 原值）。
+> asar 原值由发行版决定——本机 ZCodium 1.0.2 实测是 `Bludoge`，
+> 所以「还原原值」并不能得到用户想要的 ZCodium。无参路径直接以 ZCodium 为目标写入。
 
 ---
 
@@ -38,7 +40,7 @@ python "<skill目录>/scripts/zcode_patcher.py" --display-name --check
 ```
 
 - 「待还原 N 个文件」→ 当前是改过的名字，需要还原，继续第 2 步。
-- 「没有可用的 sidecar 备份，跳过」→ 从未改过名，已经是 ZCodium，**直接回复用户，结束**。
+- 「已是目标内容（当前值：ZCodium）」→ 已经是 ZCodium，**直接回复用户，结束**。
 
 任一路径出现「未定位到目标（结构可能已变）」→ 报告即结论，不要手工改 asar。
 
@@ -97,7 +99,7 @@ python "<skill目录>/scripts/sync.py"
 
 一条消息说清三件事：
 
-1. **当前状态**：已改名 / 已还原 / 已排期（下次退出时生效）/ 本来就是 ZCodium。
+1. **当前状态**：已改名 / 已还原为 ZCodium / 已排期（下次退出时生效）/ 本来就是 ZCodium。
 2. **还原命令**（改名时务必给）：
    ```bash
    python "<skill目录>/scripts/zcode_patcher.py" --display-name --revert
@@ -109,7 +111,8 @@ python "<skill目录>/scripts/sync.py"
 
 ## 规则
 
-- **无参 = 还原为 ZCodium**：清空配置里的 `display_name` 并同步，不要只打印「保持原样」。
+- **无参 = 强制写回 ZCodium**：清空配置里的 `display_name` 并同步，不要只打印「保持原样」。
+- `--check` 会打印当前值（如「待写入（当前值：Bludoge）」），据此向用户说明现状。
 - **参数校验**（写配置前做）：去首尾空白；长度 1–40；不含 `` ` `` `"` `'` `\` 与换行。
   不合法就直接说明原因，不要写入。
 - **不要自己发明命令**：`--display-name` 不带 `--name` 是**还原**语义，不是空操作。

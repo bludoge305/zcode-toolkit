@@ -268,6 +268,11 @@ def parse_wants(argv: list[str]):
         if key == "reasoning_config" and not enabled:
             # 思考档位配置关闭为"不托管"语义：绝不执行 revert，避免覆盖客户端文件并导致重启死循环
             continue
+        if key in STRING_KEYS:
+            # 字符串型开关（display_name）：空值 = 无参语义 = **写回 ZCodium**，
+            # 所以无论值有没有，都是「应用」而不是 revert。revert 仅用于精确撤销 sidecar。
+            tasks.append((_task_args(key, value), False))
+            continue
         tasks.append((_task_args(key, value), not enabled))
     return tasks
 

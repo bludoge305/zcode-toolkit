@@ -4593,12 +4593,15 @@ class TestDisplayNameRestoreSemantics(TempCase):
         self.assertTrue(zp.process_display_name(self.asar, True, False))
         self.assertEqual(self.asar.read_bytes(), before, "--check 竟然写了盘")
 
-    def test_no_name_check_reports_pending_restore(self):
+    def test_no_name_check_reports_pending_write(self):
+        """无参 = 写回 ZCodium。当前不是 ZCodium 时应报「待写入 → ZCodium」。"""
         self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             zp.process_display_name(self.asar, True, False)
-        self.assertIn("待还原", buf.getvalue())
+        text = buf.getvalue()
+        self.assertIn("待写入", text)
+        self.assertIn("ZCodium", text)
 
     def test_no_name_when_never_renamed_is_noop(self):
         """从未改过名时，无参执行应报告「没有可用的 sidecar 备份」而不是失败。"""
@@ -4623,7 +4626,7 @@ class TestDisplayNameRestoreSemantics(TempCase):
 
     def test_describe_deferred_wording(self):
         import sync as _sync
-        self.assertEqual(_sync._describe_deferred("display_name", ""), "display_name→还原")
+        self.assertEqual(_sync._describe_deferred("display_name", ""), "display_name→ZCodium")
         self.assertEqual(_sync._describe_deferred("display_name", "Bludoge"),
                          "display_name→Bludoge")
         self.assertEqual(_sync._describe_deferred("tps_footer", False), "tps_footer→关")
@@ -4654,21 +4657,16 @@ class TestRenameStateRecognition(TempCase):
         # check_state 跑真实 asar（可能已是 123），此处只验输出措辞
         self.assertIn("123", text)
 
-    def test_pending_restore_is_off(self):
-        """有 sidecar 时输出「待还原」，语义是 off。
-
-        ⚠️ 不能用 check_state() 验：它跑的是**真实客户端**的 asar
-        （那里 sidecar 可能已被还原清理），与这里的临时 asar 无关。
-        只验脚本输出措辞，映射本身由 TestNoSidecarIsOn / 下面的断言覆盖。
-        """
-        import sync as _sync
+    def test_no_name_pending_write_is_off(self):
+        """无参 = 写回 ZCodium；当前是别的名字时应报「待写入 → ZCodium」（off）。"""
         self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             zp.process_display_name(self.asar, True, False)
-        self.assertIn("待还原", out.getvalue())
-        # 映射表是纯文本判定，直接验特征串 → 状态
-        self.assertEqual(_sync.check_state(["--display-name", "--nonexistent-flag"]), "unknown")
+        text = out.getvalue()
+        self.assertIn("待写入", text)
+        self.assertIn("ZCodium", text)
+        self.assertIn("Bludoge", text)   # 当前值也要能看到
 
     def test_already_target_is_on(self):
         """已经是目标名字时 check 输出 [=]，必须判 on（否则每轮都白排一次看护）。
@@ -4702,26 +4700,21 @@ class TestNoSidecarIsOn(TempCase):
             "out/renderer/a.js":
                 b'function A(e){return e?.displayName?.trim()||e?.username?.trim()||`ZCodium`}'})
 
-    def test_no_sidecar_means_on(self):
-        import sync as _sync
-        # 从未打过补丁 → 没有 sidecar
+    def test_no_sidecar_still_targets_zcodium(self):
+        """无参不依赖 sidecar：无论有没有备份，目标都是 ZCodium。"""
         self.assertFalse((self.tmp / "app.asar.name-patch.json").exists())
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertTrue(zp.process_display_name(self.asar, True, False))
-        # 只验措辞：process_display_name 是单函数，汇总表在 main() 里打。
-        # check_state 跑的是真实客户端 asar，与本临时件无关，不能拿来断言。
-        self.assertIn("没有可用的 sidecar 备份", out.getvalue())
-        self.assertTrue(zp.process_display_name(self.asar, True, False),
-                        "没有 sidecar 时应返回成功（已是原样），不是失败")
+        text = out.getvalue()
+        # 临时 asar 的原值就是 ZCodium → 已是目标内容
+        self.assertIn("已是目标内容", text)
+        self.assertIn("ZCodium", text)
 
-    def test_after_revert_is_on(self):
-        import sync as _sync
+    def test_no_name_writes_zcodium(self):
+        """无参 = 强制写回 ZCodium（不是从 sidecar 还原成发行版原值）。"""
         self.assertTrue(zp.process_display_name(self.asar, False, False, name="123"))
-        self.assertTrue(zp.process_display_name(self.asar, False, False))   # 还原
-        self.assertFalse((self.tmp / "app.asar.name-patch.json").exists(),
-                         "还原后 sidecar 应被清理")
-        # 还原后内容回到原样
+        self.assertTrue(zp.process_display_name(self.asar, False, False))
         raw, header, ds = zp._asar_header_raw(self.asar)
         blob = zp._asar_entry_bytes(raw, ds, zp._asar_find_entry(header, "out/renderer/a.js"))
         self.assertIn(b"`ZCodium`", blob)

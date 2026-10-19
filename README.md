@@ -1,7 +1,7 @@
 # zcode-tokenspeed · ZCode 客户端一站式原生增强套件
 
 <p align="left">
-  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.35-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.6.36-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -165,6 +165,14 @@ run.cmd                        # Windows
 - **语义修正为“不托管”**：3.14+ 思考档位配置目标为客户端自带的 `provider_config.json`；当开关关闭时语义明确为“停止托管与同步”，插件不再主动写入，且绝不主动还原该文件，彻底切断“退出还原 → 客户端重启写回 → 再次检测冲突 → 再次看护还原”的无限死循环；
 - **看护空任务守卫**：`apply_after_exit.py` 严格过滤 `reasoning_config=off` 任务；若最终无待执行补丁任务，看护直接安全退出，杜绝空任务挂起等待与退出自动重启 ZCode。
 - **全平台兼容吸收**：完整吸纳 PR #4 对 macOS 看护链路的跨平台支持与 crashpad 僵尸进程排除。
+
+#### 0.6.36（无参强制写回 ZCodium）
+- **语义修正**：`/zcode-patch-setdisplayname` 不带参数时**强制写回 `ZCodium`**，
+  不再走「从 sidecar 还原 asar 原值」。asar 原值由发行版决定——本机 ZCodium 1.0.2
+  实测是 `Bludoge`，按原值还原出来的仍不是用户要的 ZCodium；
+- **`--check` 报告当前实际值**：改名/还原模式都会打印「当前值：X」，
+  不用再靠猜或手动读 asar；
+- 看护与 sync 同步调整：`display_name` 的空值一律按「应用 ZCodium」执行（`revert=False`）。
 
 #### 0.6.35（修好「每次打完补丁都误报客户端升级」）
 - **升级判定去掉 asar 大小判据**：原逻辑把 `size` 变化当成「客户端升级」，但本插件自己的

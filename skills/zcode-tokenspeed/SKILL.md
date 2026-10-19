@@ -106,7 +106,7 @@ python "<skill目录>/scripts/doctor.py" --where  # 只查「插件装在哪」+
 | 增强提示词按钮 | `--enhance-prompt` | 开 | ZCode 退出时自动应用，**再启动**才生效（两次启停） |
 | 设置页模型拉取按钮 | `--model-puller` | 开 | ZCode 退出时自动应用，**再启动**才生效（两次启停） |
 | 思考档位内核补丁（旧版专用） | 无参数 | 开 | 仅 ≤3.11.2 需要；3.14+ 自动跳过并报「本版本不适用」 |
-| 界面显示名称 | `--display-name --name <名字>` | **空串**（= 保持 ZCodium） | 值是名字本身（字符串型开关）；ZCode 退出时自动应用；空串表示不托管、不改动任何内容 |
+| 界面显示名称 | `--display-name --name <名字>` | **空串**（= 强制写回 ZCodium） | 值是名字本身（字符串型开关）；ZCode 退出时自动应用；空串表示「无参语义」：目标固定为 ZCodium |
 | 窗口 ID 缺陷修复 | `--window-id-fix` | 开 | ZCode 退出时自动应用；客户端无该缺陷时报「目标不存在（已修复）」，属正常 |
 
 行为约定（`scripts/sync.py`，由 SessionStart hook 调用）：
@@ -239,16 +239,17 @@ python "<skill目录>/scripts/zcode_patcher.py" --model-puller
 | 加宽模型弹窗 | 模型选择浮窗加宽，长模型名不再截断 | `python zcode_patcher.py --model-width [--check/--revert]` | app.asar 内主 bundle（同长度原地改字节） |
 | **增强提示词** | 输入框旁一键润色草稿（可恢复原文）；**右键**弹出菜单选择使用哪个模型 | `python zcode_patcher.py --enhance-prompt [--check/--revert]` | app.asar（重打包级：renderer 脚本 + index.html + preload 桥 + main IPC） |
 | 模型拉取按钮 | 设置页一键拉取/勾选模型 | `python zcode_patcher.py --model-puller [--check/--revert]` | app.asar（重打包级：renderer 脚本 + index.html + preload 桥 + main IPC） |
-| **界面显示名称** | 改界面左下角显示名（不传 `--name` 则保持原样） | `python zcode_patcher.py --display-name --name "<名字>" [--check/--revert]` | app.asar（重打包级：按表达式上下文定位并替换字面量） |
+| **界面显示名称** | 改界面左下角显示名（不传 `--name` 则强制写回 ZCodium） | `python zcode_patcher.py --display-name --name "<名字>" [--check/--revert]` | app.asar（重打包级：按表达式上下文定位并替换字面量） |
 | 窗口 ID 缺陷修复 | 修 ZCodium 1.0.2 的 `disposeWindow(browserWindowId)` 未定义变量 | `python zcode_patcher.py --window-id-fix [--check/--revert]` | app.asar（重打包级） |
 
 > **界面显示名称是字符串型开关**：配置项 `display_name` 的值就是目标名字
-> （`plugins.options[...].display_name = "Bludoge"`），空串表示「保持 ZCodium 原样、不托管」。
+> （`plugins.options[...].display_name = "Bludoge"`）。
+> **空串（或无参执行）= 强制写回 `ZCodium`**，不是「不托管」也不是「恢复 asar 原值」——
+> asar 原值由发行版决定（本机 ZCodium 1.0.2 实测为 `Bludoge`），按原值还原得不到 ZCodium。
 > 设置方式二选一：插件配置页直接填名字，或跑 `/zcode-patch-setdisplayname <名字>`。
 > 后者只需写配置再跑一次 `sync.py`，**不要自己写看护脚本**——名字会经
 > `patch_args()` → `--want=display_name=<名字>` → 看护 `_task_args()` 全链路透传。
-> 命令行直用时必须同时给 `--name`；只给 `--display-name` 会打印「未指定目标名，保持原样」
-> 并返回成功（空操作）。
+> `--check` 会打印当前实际值（如「待写入（当前值：Bludoge）」），可直接据此回答用户。
 
 两个及以上功能可一次执行：`python zcode_patcher.py --usage-chart --model-width --tps-footer --thought-slider --model-puller`。
 全部功能一条命令：`python zcode_patcher.py --all [--check/--revert]`（等价于写全上表所有补丁参数 + 内核补丁）。

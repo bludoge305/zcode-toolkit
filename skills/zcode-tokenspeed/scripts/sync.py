@@ -575,7 +575,8 @@ def _describe_deferred(key: str, value) -> str:
     写成「display_name→关」会让人以为是把功能关掉了。
     """
     if key in STRING_OPTION_KEYS:
-        return f"{key}→{'还原' if not value else value}"
+        # 空值 = 无参语义 = 写回 ZCodium（应用，不是还原）
+        return f"{key}→{'ZCodium' if not value else value}"
     return f"{key}→{'开' if value else '关'}"
 
 
@@ -635,17 +636,17 @@ def run_sync(echo: bool = False) -> str:
                 failed.append(f"{key}(更新失败)")
             continue
         if key in STRING_OPTION_KEYS and not want:
-            # 空名字 = 要还原成原品牌名。state=off 表示「还没还原」→ 执行还原；
-            # state=on 表示「已经是原品牌名」→ 无事可做。
+            # 空名字 = 无参语义 = **强制写回 ZCodium**（不是从 sidecar 还原）。
+            # state=off 表示还不是 ZCodium → 执行；state=on 表示已经是 → 无事可做。
             # 注意不能落到下面的通用分支：那里 `not want and state == "off"` 会走
-            # 「已一致」continue，正好把还原需求吞掉。
+            # 「已一致」continue，正好把这个需求吞掉。
             if state == "off":
                 if repack:
                     deferred[key] = want
                 else:
-                    verdict = run_patcher(args, revert=True)
+                    verdict = run_patcher(args, revert=False)
                     if verdict == "ok":
-                        changed.append(f"{key}→还原")
+                        changed.append(f"{key}→ZCodium")
                     elif verdict == "refused":
                         deferred[key] = want
                     else:
