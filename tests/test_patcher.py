@@ -828,6 +828,8 @@ class TestGeneratedJs(unittest.TestCase):
         self._check(code)
         self.assertIn("renameSync", code, "配置写入应为原子替换")
         self.assertIn("oldOrder", code, "modelOrder 应保序")
+        self.assertIn("cleanTargetUrl", code, "应支持针对特定 target 的识别")
+        self.assertIn("isTarget", code, "只有目标供应商才允许新增 rule，严禁复活已删除条目")
 
     def test_preload_injection_is_valid_js(self):
         self._check("const o={" + zp._models_preload_block("_").decode()

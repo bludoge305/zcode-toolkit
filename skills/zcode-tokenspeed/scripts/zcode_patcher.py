@@ -1241,14 +1241,12 @@ let legacy={};
 try{legacy=JSON.parse(e.readFileSync(t.join(root,"provider_config.json"),"utf-8"))}catch(_){}
 let rules=(legacy&&legacy.config&&legacy.config.providerConfigRules&&legacy.config.providerConfigRules.providerRules)||[];
 let kt=(y)=>/anthropic/i.test(String(y))?"anthropic":(/responses/i.test(String(y))?"openai":"openai-compatible");
-// 以 provider_config.json 的 rules 为有效准绳，过滤掉已在界面被用户删除的幽灵条目
+// 以 provider_config.json 的 rules 为唯一有效准绳，彻底剔除已在界面被用户删除的幽灵条目
 let validPids=new Set(rules.map(r=>r&&r.providerId).filter(Boolean));
-let validUrls=new Set(rules.map(r=>r&&r.config&&r.config.api&&r.config.api.baseUrl?String(r.config.api.baseUrl).trim().replace(/\/+$/,""):"").filter(Boolean));
 if(rules.length>0){
 for(let k0 of Object.keys(cfg.provider||{})){
 if(String(k0).startsWith("builtin:"))continue;
-let bu=String((cfg.provider[k0]&&cfg.provider[k0].options&&cfg.provider[k0].options.baseURL)||"").trim().replace(/\/+$/,"");
-if(!validPids.has(k0)&&(!bu||!validUrls.has(bu))){
+if(!validPids.has(k0)){
 delete cfg.provider[k0];
 }
 }
@@ -1259,19 +1257,25 @@ if(!pid)continue;
 let c=rule.config||{},api=c.api||{};
 let old=cfg.provider[pid];
 if(!old||typeof old!="object"||Array.isArray(old))old=cfg.provider[pid]={};
-let models=(old.models&&typeof old.models=="object"&&!Array.isArray(old.models))?old.models:(old.models={});
+old.name=rule.providerName||old.name||pid;
+if(api.type)old.kind=kt(api.type);
+else if(!old.kind)old.kind="openai-compatible";
+old.source="custom";
+let opts=(old.options&&typeof old.options=="object"&&!Array.isArray(old.options))?old.options:(old.options={});
+if(api.baseUrl)opts.baseURL=api.baseUrl;
+// 模型状态以 provider_config.json 为准：剔除在界面已被删除的孤儿模型
 let ids=Array.isArray(c.personalModelIds)?c.personalModelIds:[];
+let validMids=new Set(ids.map(x=>String(x).trim()).filter(Boolean));
+let models=(old.models&&typeof old.models=="object"&&!Array.isArray(old.models))?old.models:(old.models={});
+for(let m0 of Object.keys(models)){
+if(!validMids.has(m0))delete models[m0];
+}
 for(let id0 of ids){
 if(typeof id0!="string")continue;
 let id=id0.trim();
 if(!id||models[id])continue;
 models[id]={limit:{context:1000000,output:128000},modalities:{input:["text","image"],output:["text"]},zcode:{modalitiesConfigured:!0,modified:!0}}
 }
-if(!old.name)old.name=rule.providerName||pid;
-if(!old.kind)old.kind=kt(api.type||"");
-if(!old.source)old.source="custom";
-let opts=(old.options&&typeof old.options=="object"&&!Array.isArray(old.options))?old.options:(old.options={});
-if(!opts.baseURL&&api.baseUrl)opts.baseURL=api.baseUrl;
 }
 // 不回传 apiKey：渲染层只需要 baseURL 与模型名；写回时由主进程保留磁盘上的原 Key
 for(let p of Object.values(cfg.provider)){
@@ -1281,9 +1285,12 @@ return{success:!0,data:cfg}
 }catch(e){return{success:!1,error:String(e)}}});
 '''.replace("__H__", h)
     write_h = r'''
-__H__.handle("zcode:write-model-config",async(e,t)=>{
+__H__.handle("zcode:write-model-config",async(e,payload)=>{
 try{
-if(typeof t!="object"||t===null)throw new Error("invalid config payload");
+if(typeof payload!="object"||payload===null)throw new Error("invalid config payload");
+let t=(payload.config&&typeof payload.config=="object")?payload.config:payload;
+let targetPid=payload.targetPid||payload.__targetPid||t.__targetPid||null;
+let targetBaseUrl=payload.targetBaseUrl||payload.__targetBaseUrl||t.__targetBaseUrl||null;
 let{default:n}=await import("node:fs"),{default:r}=await import("node:path"),{default:i}=await import("node:os");
 let base=i.homedir();
 try{let s=JSON.parse(n.readFileSync(r.join(base,".zcode","v2","setting.json"),"utf-8"));
@@ -1303,24 +1310,29 @@ let mrules=Array.isArray(mcr.providerModelRules)?mcr.providerModelRules:(mcr.pro
 let byId={};
 for(let rule of rules){if(rule&&rule.providerId)byId[rule.providerId]=rule}
 let kt=(y)=>/anthropic/i.test(String(y))?"anthropic-messages":(/responses/i.test(String(y))?"openai-responses":"openai-chat-completions");
+let norm=(u)=>String(u||"").trim().replace(/\/+$/,"").replace(/\/v1$/,"");
+let cleanTargetUrl=norm(targetBaseUrl);
 
 // 渲染层不回传 apiKey（读接口已脱敏）：条目缺 apiKey 时保留磁盘上的原值；
-// 并在写 config.json 前同步剔除已在界面删除且无模型的幽灵条目，防止死条目残留
+// 核心修复：彻底剔除不在 rules 且非当前操作目标的幽灵条目，绝不因含有模型而残留！
 try{
 let prev={};try{prev=JSON.parse(n.readFileSync(o,"utf-8"))}catch(_){}
 for(let pid of Object.keys(t.provider||{})){
 if(String(pid).startsWith("builtin:"))continue;
 let np=t.provider[pid],op=prev&&prev.provider?prev.provider[pid]:null;
 if(!np||typeof np!="object"){delete t.provider[pid];continue}
+let bu=norm(np.options&&np.options.baseURL);
+let isTarget=(targetPid&&pid===targetPid)||(cleanTargetUrl&&bu&&bu===cleanTargetUrl);
+let hasRule=!!byId[pid];
+if(!hasRule&&bu){
+for(let r2 of rules){let u=norm(r2&&r2.config&&r2.config.api&&r2.config.api.baseUrl);if(u&&u===bu){hasRule=!0;break}}
+}
+if(!hasRule&&!isTarget){
+delete t.provider[pid];
+continue;
+}
 if(!np.options||typeof np.options!="object")np.options={};
 if(!np.options.apiKey&&op&&op.options&&op.options.apiKey)np.options.apiKey=op.options.apiKey;
-let hasRule=!!byId[pid];
-if(!hasRule){
-let bu=String((np.options&&np.options.baseURL)||"").replace(/\/+$/,"");
-if(bu){for(let r2 of rules){let u=(r2&&r2.config&&r2.config.api&&r2.config.api.baseUrl)||"";if(u.replace(/\/+$/,"")===bu){hasRule=!0;break}}}
-}
-let mCount=Object.keys(np.models||{}).length;
-if(!hasRule&&mCount===0&&rules.length>0){delete t.provider[pid]}
 }
 }catch(_){}
 
@@ -1338,13 +1350,21 @@ if(String(pid).startsWith("builtin:"))continue;
 let models=pdata.models||{};
 let ids=Object.keys(models);
 let rule=byId[pid];
+let bu=norm(pdata.options&&pdata.options.baseURL);
+if(!rule&&bu){
+for(let r2 of rules){let u=norm(r2&&r2.config&&r2.config.api&&r2.config.api.baseUrl);if(u&&u===bu){rule=r2;break}}
+}
+let isTarget=(targetPid&&pid===targetPid)||(cleanTargetUrl&&bu&&bu===cleanTargetUrl);
+// 严格限制：只有当前正在操作的目标供应商，且存在有效模型时，才允许为全新供应商创建 rule，严禁自动复活任何已删除条目
 if(!rule){
-let bu=String((pdata.options&&pdata.options.baseURL)||"").replace(/\/+$/,"");
-if(bu){for(let r2 of rules){let u=(r2&&r2.config&&r2.config.api&&r2.config.api.baseUrl)||"";
-if(u.replace(/\/+$/,"")===bu){rule=r2;break}}}}
-// 只有当存在有效模型（正在添加/同步）时，才为全新供应商创建 rule，严禁自动复活已删除条目
-if(!rule&&ids.length>0){rule={providerId:pid,providerName:pdata.name||pid,config:{group:"standard-personal",access:{type:"api-key"},api:{type:kt(pdata.kind||"")},personalModelIds:[],modelOrder:[]}};rules.push(rule);byId[pid]=rule}
-if(!rule)continue;
+if(isTarget&&ids.length>0){
+rule={providerId:pid,providerName:pdata.name||pid,config:{group:"standard-personal",access:{type:"api-key"},api:{type:kt(pdata.kind||"")},personalModelIds:[],modelOrder:[]}};
+rules.push(rule);
+byId[pid]=rule;
+}else{
+continue;
+}
+}
 
 let c=rule.config=rule.config||{};
 c.group=c.group||"standard-personal";
@@ -1644,29 +1664,13 @@ how=String(pick.how||"");
 let kind=String(pick.p.kind||"openai-compatible");
 let sys=__SYS__,tpl=__TPL__;
 let user=tpl.split("{input}").join(text);
-let cs=[],body;
 // 热配置参数：maxTokens / temperature / 思考强度（reasoningEffort 或 thinkingBudget）
 let cfgMax=Math.max(256,Number(cfg.maxTokens)||2048);
 let cfgTemp=(cfg.temperature==null||isNaN(Number(cfg.temperature)))?0.3:Number(cfg.temperature);
 let re=String(cfg.reasoningEffort||"").trim().toLowerCase();
 let tb=Number(cfg.thinkingBudget)||0;
-let headers={"Content-Type":"application/json","Accept":"application/json",Authorization:"Bearer "+k,"x-api-key":k};
-if(kind==="anthropic"){
-cs.push((u.endsWith("/v1")?u:u+"/v1")+"/messages");
-body={model:pick.mid,max_tokens:cfgMax,system:sys,messages:[{role:"user",content:user}]};
-if(re||tb>0){let budget=Math.max(1024,Math.min(32768,tb||8192));
-body.thinking={type:"enabled",budget_tokens:budget};
-body.max_tokens=Math.max(cfgMax,budget+1024)}}
-else{
-cs.push((u.endsWith("/v1")?u:u+"/v1")+"/chat/completions");
-cs.push(u+"/chat/completions");
-body={model:pick.mid,stream:!1,temperature:cfgTemp,max_tokens:cfgMax,
-messages:[{role:"system",content:sys},{role:"user",content:user}]};
-if(re)body.reasoning_effort=re}
-let payload=JSON.stringify(body);
+
 // —— 错误分类 + 重试策略 ——
-// retryable: 换地址重试 / 退避重试有意义（网络抖动、超时、限流、供应商 5xx）
-// permanent: 请求本身或账号的问题，重试无意义，但要做「友好归因」
 function classify(code,status,msg){
 let m=String(msg||"").toLowerCase();
 if(/model is unavailable|model_not_found|not found|unknown model|no such model|not available|not supported/.test(m))
@@ -1682,21 +1686,50 @@ if(status===400)return{kind:"bad-request",retry:!1,tip:"请求被上游拒绝（
 if(code==="timeout")return{kind:"timeout",retry:!0,tip:"网络超时，请检查代理或稍后重试"};
 if(code==="network")return{kind:"network",retry:!0,tip:"无法连接供应商，请检查网络与代理设置"};
 return{kind:"other",retry:!!(code!=="http"),tip:""}}
+
+async function requestModel(curPick){
+let curU=String(curPick.p.options.baseURL||"").replace(/\\/+$/,"");
+let curK=String(curPick.p.options.apiKey||"");
+if(!curU)return{success:!1,code:"no-baseurl",error:"供应商「"+curPick.pid+"」没有填 Base URL"};
+if(!curK)return{success:!1,code:"no-key",error:"供应商「"+curPick.pid+"」没有填 API Key"};
+let curKind=String(curPick.p.kind||"openai-compatible");
+let cs=[],curBody;
+let curHeaders={"Content-Type":"application/json","Accept":"application/json",Authorization:"Bearer "+curK,"x-api-key":curK};
+if(curKind==="anthropic"){
+curHeaders["anthropic-version"]="2023-06-01";
+cs.push((curU.endsWith("/v1")?curU:curU+"/v1")+"/messages");
+curBody={model:curPick.mid,max_tokens:cfgMax,system:sys,messages:[{role:"user",content:user}]};
+if(re||tb>0){let budget=Math.max(1024,Math.min(32768,tb||8192));
+curBody.thinking={type:"enabled",budget_tokens:budget};
+curBody.max_tokens=Math.max(cfgMax,budget+1024)}}
+else{
+cs.push((curU.endsWith("/v1")?curU:curU+"/v1")+"/chat/completions");
+cs.push(curU+"/chat/completions");
+curBody={model:curPick.mid,stream:!1,temperature:cfgTemp,max_tokens:cfgMax,
+messages:[{role:"system",content:sys},{role:"user",content:user}]};
+if(re)curBody.reasoning_effort=re}
+let payload=JSON.stringify(curBody);
 let lastRes=null,lastErr="";
 for(let cur of cs){
 let mod=cur.indexOf("https:")===0?httpsMod:httpMod;
 if(!mod){lastErr="无法加载 Node HTTP 模块";continue}
 let res=await new Promise(resolve=>{
-let req=mod.request(cur,{method:"POST",headers:Object.assign({},headers,{"Content-Length":Buffer.byteLength(payload)}),timeout:60000},r2=>{
+let req=mod.request(cur,{method:"POST",headers:Object.assign({},curHeaders,{"Content-Length":Buffer.byteLength(payload)}),timeout:60000},r2=>{
 let b="";r2.on("data",c=>b+=c);
 r2.on("end",()=>{
 if(r2.statusCode>=200&&r2.statusCode<300){try{
 let j=JSON.parse(b),out="";
-if(j&&j.choices&&j.choices[0]){let m0=j.choices[0].message||{};out=String(m0.content||"");if(!out&&typeof j.choices[0].text==="string")out=j.choices[0].text}
-if(!out&&j&&Array.isArray(j.content))out=j.content.map(function(c){return String(c&&c.text||"")}).join("");
+if(j&&j.choices&&j.choices[0]){
+let m0=j.choices[0].message||{};
+if(typeof m0.content==="string")out=m0.content;
+else if(Array.isArray(m0.content))out=m0.content.map(c=>String((c&&c.text)||c||"")).join("");
+if(!out&&typeof j.choices[0].text==="string")out=j.choices[0].text;
+if(!out&&typeof m0.reasoning_content==="string"&&m0.reasoning_content.trim())out=m0.reasoning_content.trim()}
+if(!out&&j&&Array.isArray(j.content))out=j.content.map(function(c){return String((c&&c.text)||c||"")}).join("");
 if(!out&&j&&typeof j.output_text==="string")out=j.output_text;
 out=String(out||"").trim();
-if(out)return resolve({success:!0,text:out,model:pick.mid,provider:pick.pid,how:how});
+if(out.indexOf("```")===0){let idx=out.indexOf(String.fromCharCode(10));if(idx>0){let last=out.lastIndexOf("```");if(last>idx)out=out.slice(idx+1,last).trim()}}
+if(out)return resolve({success:!0,text:out,model:curPick.mid,provider:curPick.pid,how:String(curPick.how||"")});
 return resolve({success:!1,code:"empty-reply",error:"模型返回了空内容（HTTP "+r2.statusCode+"）"});
 }catch(perr){return resolve({success:!1,code:"parse",error:"响应解析失败："+String(perr)})}}
 let msg="";
@@ -1708,12 +1741,12 @@ req.write(payload);req.end()});
 if(res&&res.success)return res;
 lastRes=res;lastErr=(res&&res.error)||lastErr;
 let cls=classify(res&&res.code,res&&res.status,res&&res.error);
-if(!cls.retry)break;                                  // 不可重试：立刻停，换地址也没用
-if(cur!==cs[cs.length-1])continue;                     // 还有候选地址：先换地址
+if(!cls.retry)break;
+if(cur!==cs[cs.length-1])continue;
 if(cls.kind==="rate"||cls.kind==="server"||cls.kind==="timeout"||cls.kind==="network"){
 await new Promise(z=>setTimeout(z,cls.kind==="rate"?1600:600));
-let res2=await new Promise(resolve=>{                 // 原地重试一次
-let req=mod.request(cur,{method:"POST",headers:Object.assign({},headers,{"Content-Length":Buffer.byteLength(payload)}),timeout:60000},r2=>{
+let res2=await new Promise(resolve=>{
+let req=mod.request(cur,{method:"POST",headers:Object.assign({},curHeaders,{"Content-Length":Buffer.byteLength(payload)}),timeout:60000},r2=>{
 let b="";r2.on("data",c=>b+=c);
 r2.on("end",()=>{let msg="";
 try{let j=JSON.parse(b);msg=(j&&(j.error&&(j.error.message||j.error)||j.message))||""}catch(_){msg=b.slice(0,200)}
@@ -1723,13 +1756,35 @@ req.on("timeout",()=>{req.destroy();resolve({success:!1,code:"timeout",error:"�
 req.write(payload);req.end()});
 if(res2){lastRes=res2;lastErr=res2.error||lastErr}}
 }
-// 向上层交出「机器可读 code + 可读 error + 可执行 tip」，前端据此做友好提示
-let fin=lastRes||{code:"unreachable",error:lastErr||("未能连通 "+u+"，请检查供应商地址与协议类型")};
+let fin=lastRes||{code:"unreachable",error:lastErr||("未能连通 "+curU+"，请检查供应商地址与协议类型")};
 let fc=classify(fin.code,fin.status,fin.error);
-// 「模型不可用」这类错误，直接把原因与建议说清楚，别再让用户面对 HTTP 400
 return{success:!1,code:fc.kind||fin.code||"error",status:fin.status,
 error:fin.error||"增强失败",tip:fc.tip||"请检查模型与供应商配置",
-provider:pick.pid,model:pick.mid,tried:tried.slice(0,4)};
+provider:curPick.pid,model:curPick.mid,tried:tried.slice(0,4)};
+}
+
+let res=await requestModel(pick);
+if(res&&res.success)return res;
+
+// ★ 智能故障转移（Fallback Recovery）：
+// 若首选模型因上游限制、余额不足、超时或空回复失败，自动尝试其他可用供应商的备用模型（最多 2 个），避免润色中断
+let altTried=[];
+for(let c of all){
+if(c.pid===pick.pid||!usable(c.p))continue;
+let mid=Object.keys(c.p.models||{})[0];
+if(!mid)continue;
+altTried.push(cand(c.pid,mid,"fallback-auto"));
+if(altTried.length>=2)break;
+}
+for(let altPick of altTried){
+if(!altPick)continue;
+let altRes=await requestModel(altPick);
+if(altRes&&altRes.success){
+altRes.fallbackTip="（原模型「"+pick.mid+"」不可用，已自动切换备用模型「"+altPick.mid+"」）";
+return altRes;
+}
+}
+return res;
 }catch(err2){return{success:!1,code:"exception",error:"增强失败："+String(err2&&err2.message||err2),tip:"内部异常，请把这条信息反馈给插件作者"}}});
 '''
 

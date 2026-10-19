@@ -839,6 +839,7 @@
           const nid = window.crypto && crypto.randomUUID
             ? crypto.randomUUID()
             : "puller-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+          targetPid = nid;
           p = {
             name: newName,
             kind: kind,
@@ -853,6 +854,14 @@
           providers[nid] = p;
           createdProvider = { name: newName, kind: kind };
           console.log("[ZCode-Model-Puller] 供应商不存在，已自动创建:", createdProvider);
+        } else {
+          if (!p.options) p.options = {};
+          if (!p.options.baseURL || normBase(p.options.baseURL) !== cleanBase) {
+            p.options.baseURL = baseUrl;
+          }
+          if (apiKey && !p.options.apiKey) {
+            p.options.apiKey = apiKey;
+          }
         }
 
         // 关键修复：勾选的模型一律重写条目，不再因 config 里已存在而跳过。
@@ -898,7 +907,14 @@
           `[ZCode-Model-Puller] 写入完成：新增 ${addedCount} 个，重写已存在 ${refreshedCount} 个 →`,
           targetList.map((x) => x.name)
         );
-        const ok = await writeZCodeConfig(cfg);
+        const payload = Object.assign({}, cfg, {
+          config: cfg,
+          targetPid: targetPid,
+          targetBaseUrl: baseUrl,
+          __targetPid: targetPid,
+          __targetBaseUrl: baseUrl,
+        });
+        const ok = await writeZCodeConfig(payload);
         if (!ok) {
           throw new Error("写入配置文件失败");
         }
@@ -928,40 +944,61 @@
     document.body.appendChild(overlay);
   }
 
-  // 注入高级质感按钮
-  function checkAndInject() {
-    // 便宜短路：按钮已注入且仍在 DOM 里就别再全量扫了（这个函数被观察器高频调用）
-    const injected = document.getElementById("zcode-auto-pull-models-btn");
-    if (injected && injected.isConnected) return;
-
-    // 1. 优先使用官方 E2E 规范契约 testid 与历史混淆锚点秒查（单次属性查询微秒级，在聊天主界面瞬间短路）
-    let addModelBtn = document.querySelector('[data-testid="model-provider-add-model-button"]') ||
-                      document.querySelector('[data-testid="Goe"]');
-
-    // 2. 文本兜底：仅当未命中 testid 且存在供应商详情/抽屉容器时才遍历按钮（杜绝聊天主界面全量扫按钮）
-    if (!addModelBtn) {
-      const container = document.querySelector(
-        '[data-model-provider-detail-scroll="true"], [data-model-provider-split-panel="true"], [role="dialog"]'
-      );
-      if (container) {
-        const btns = Array.from(container.querySelectorAll("button"));
-        addModelBtn = btns.find(
-          (b) => b.textContent.includes("添加模型") && b.getAttribute("id") !== "zcode-auto-pull-models-btn"
-        );
+  // 查找当前真正处于可见状态的「添加模型」按钮
+  function findActiveAddModelButton() {
+    // 1. 优先按官方 data-testid 查找可见按钮
+    const candidates = Array.from(document.querySelectorAll(
+      'button[data-testid="model-provider-add-model-button"], button[data-testid="Goe"]'
+    ));
+    for (const b of candidates) {
+      if (b.id !== "zcode-auto-pull-models-btn" && b.offsetParent != null) {
+        return b;
       }
     }
 
+    // 2. 文本特征兜底：查找供应商详情/弹窗/设置容器内包含“添加模型”或“Add Model”的按钮
+    const container = document.querySelector(
+      '[data-model-provider-detail-scroll="true"], [data-model-provider-split-panel="true"], [role="dialog"], [class*="provider"], [class*="settings"]'
+    );
+    if (container) {
+      const btns = Array.from(container.querySelectorAll("button"));
+      for (const b of btns) {
+        if (b.id === "zcode-auto-pull-models-btn" || b.offsetParent == null) continue;
+        const txt = (b.textContent || "").trim();
+        if (txt.includes("添加模型") || txt.includes("Add Model") || txt.includes("Add model")) {
+          return b;
+        }
+      }
+    }
+    return null;
+  }
+
+  // 注入高级质感按钮并保持与当前供应商视图强绑定自愈
+  function checkAndInject() {
+    const addModelBtn = findActiveAddModelButton();
+    // 当前视图若不在模型供应商详情页（例如在聊天主界面），快速短路
     if (!addModelBtn) return;
 
     const parent = addModelBtn.parentElement;
-    if (!parent || parent.querySelector("#zcode-auto-pull-models-btn")) return;
+    if (!parent) return;
+
+    let pullBtn = document.getElementById("zcode-auto-pull-models-btn");
+    // ★ 核心自愈：若拉取按钮已存在，但不是当前可见 addModelBtn 的相邻同级元素（例如残留于上一个供应商视图或被移动）
+    if (pullBtn && pullBtn.parentElement !== parent) {
+      pullBtn.remove();
+      pullBtn = null;
+    }
+
+    if (pullBtn && pullBtn.isConnected) {
+      return;
+    }
 
     parent.style.display = "flex";
     parent.style.flexWrap = "wrap";
     parent.style.alignItems = "center";
     parent.style.gap = "8px";
 
-    const pullBtn = document.createElement("button");
+    pullBtn = document.createElement("button");
     pullBtn.id = "zcode-auto-pull-models-btn";
     pullBtn.type = "button";
     pullBtn.setAttribute("title", "根据当前 Base URL 和 API Key 自动拉取所有可用模型");
@@ -1052,8 +1089,17 @@
     addModelBtn.after(pullBtn);
   }
 
-  // 彻底移除 document.body 的 MutationObserver，杜绝长会话挂载时的底层 C++ 监听开销。
-  // 设置页弹窗属低频偶发交互，1000ms 巡检在主聊天界面（无弹窗）时瞬间短路，零开销。
-  setInterval(checkAndInject, 1000);
+  // 监听点击与按键事件，零延迟自愈
+  try {
+    document.addEventListener("click", () => {
+      setTimeout(checkAndInject, 50);
+    }, { passive: true });
+    document.addEventListener("keydown", () => {
+      setTimeout(checkAndInject, 50);
+    }, { passive: true });
+  } catch (_) {}
+
+  // 350ms 轮询兜底，在主聊天界面时单次属性查询瞬间短路，零开销
+  setInterval(checkAndInject, 350);
   checkAndInject();
 })();

@@ -45,7 +45,7 @@
   const MENU_ID = "zenhance-model-menu";
   const STYLE_ID = "zenhance-style";
   const diag = (window.__zenhanceDiag = window.__zenhanceDiag || {});
-  diag.scriptVersion = "1.6";
+  diag.scriptVersion = "1.8";
 
   const TIP_IDLE = "增强提示词（右键选择模型）";
   const TIP_BUSY = "增强中…";
@@ -462,34 +462,67 @@
   function readText(el) {
     if (!el) return "";
     if (typeof el.value === "string") return el.value;
-    return el.innerText || el.textContent || "";
+    const txt = (typeof el.innerText === "string" && el.innerText.trim())
+      ? el.innerText
+      : (el.textContent || "");
+    return txt.replace(/\u200B/g, "");
   }
 
   /** 写回受控输入框：优先 execCommand('insertText')（textarea 与 contenteditable 都能触发
-   *  React 受控更新），失败退回「原生 setter + input 事件」。 */
+   *  React 受控更新），失败退回「原生 setter + input/beforeinput/change 事件链」。 */
   function writeText(el, text) {
     if (!el) return false;
     try { el.focus(); } catch (err) { /* ignore */ }
     try {
-      if (typeof el.select === "function") el.select();
-      else if (typeof el.setSelectionRange === "function") el.setSelectionRange(0, readText(el).length);
-      else {
+      if (typeof el.select === "function") {
+        el.select();
+      } else if (typeof el.setSelectionRange === "function") {
+        el.setSelectionRange(0, readText(el).length);
+      } else {
         const range = document.createRange();
         range.selectNodeContents(el);
         const sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(range);
       }
-      if (document.execCommand && document.execCommand("insertText", false, text)) return true;
+      if (document.execCommand && document.execCommand("insertText", false, text)) {
+        return true;
+      }
     } catch (err) { /* 落到兜底 */ }
+
     try {
       const proto = el instanceof HTMLTextAreaElement
         ? HTMLTextAreaElement.prototype
         : (el instanceof HTMLInputElement ? HTMLInputElement.prototype : null);
       const setter = proto && Object.getOwnPropertyDescriptor(proto, "value")?.set;
-      if (setter) setter.call(el, text);
-      else el.textContent = text;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
+      if (setter) {
+        setter.call(el, text);
+      } else {
+        el.textContent = text;
+      }
+      try {
+        if (el._valueTracker) el._valueTracker.setValue(text);
+      } catch (_) {}
+
+      try {
+        el.dispatchEvent(new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: text
+        }));
+      } catch (_) {}
+
+      try {
+        el.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText",
+          data: text
+        }));
+      } catch (_) {
+        try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
+      }
+      try { el.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
       return true;
     } catch (err) {
       return false;
@@ -665,11 +698,109 @@
     else host.insertBefore(el, host.firstChild);
   }
 
+  // ---------- 会话识别与隔离（Per-Session State） ----------
+  // 杜绝跨会话污染：
+  //   1. 正在润色（busy）状态属于发起润色的具体会话，切换到其他会话后按钮立即恢复待机；
+  //   2. 润色结果若在会话切换后返回，坚决不向当前切换后的会话输入框写入，而是暂存至原会话；
+  //   3. 原会话切回时，若输入框内容未变，自动恢复并应用该会话的润色结果；
+  //   4. 撤销（revert）状态与定时器仅对原会话有效，避免误撤销其他会话的草稿。
+  let ephemeralSessionCounter = 0;
+  const ephemeralSessionMap = new WeakMap();
+
+  function getActiveSessionKey() {
+    let sid = null;
+    let mainFrame = null;
+    try {
+      mainFrame = document.querySelector("[data-workspace-conversation-frame]");
+      if (mainFrame) {
+        sid = mainFrame.getAttribute("data-session-id")
+           || mainFrame.getAttribute("data-conversation-id")
+           || mainFrame.getAttribute("data-thread-id");
+        if (!sid) {
+          const inner = mainFrame.querySelector("[data-session-id], [data-conversation-id], [data-thread-id]");
+          if (inner) {
+            sid = inner.getAttribute("data-session-id")
+               || inner.getAttribute("data-conversation-id")
+               || inner.getAttribute("data-thread-id");
+          }
+        }
+      }
+      if (!sid) {
+        const pool = Array.from(document.querySelectorAll("[data-session-id], [data-conversation-id], [data-thread-id]"))
+          .filter((el) => !isInsideSidePane(el));
+        if (pool.length > 0) {
+          sid = pool[0].getAttribute("data-session-id")
+             || pool[0].getAttribute("data-conversation-id")
+             || pool[0].getAttribute("data-thread-id");
+        }
+      }
+    } catch (err) { /* ignore */ }
+
+    if (sid && String(sid).trim()) {
+      return "sess:" + String(sid).trim();
+    }
+
+    // 针对尚未保存历史的新建/空白会话，优先复用已分配给当前主视图的稳定临时键
+    if (mainFrame) {
+      let ep = null;
+      try { ep = mainFrame.getAttribute("data-zenhance-ephemeral-id"); } catch (_) {}
+      if (!ep) {
+        ep = ephemeralSessionMap.get(mainFrame);
+      }
+      if (!ep) {
+        ep = "ephemeral:" + (++ephemeralSessionCounter);
+        ephemeralSessionMap.set(mainFrame, ep);
+        try { mainFrame.setAttribute("data-zenhance-ephemeral-id", ep); } catch (_) {}
+      }
+      return ep;
+    }
+
+    return "sess:default";
+  }
+
+  const sessionStates = new Map();
+  const MAX_SESSION_STATES = 50;
+  let activeSessionKey = null;
+
+  function getSessionState(key) {
+    const k = key || "sess:default";
+    let s = sessionStates.get(k);
+    if (!s) {
+      s = {
+        status: "idle",       // "idle" | "busy" | "revert" | "pending_apply"
+        original: null,
+        enhanced: null,
+        modelUsed: "",
+        taskId: 0,
+        revertTimer: null,
+        lastActiveAt: Date.now(),
+      };
+      sessionStates.set(k, s);
+    } else {
+      s.lastActiveAt = Date.now();
+    }
+
+    if (sessionStates.size > MAX_SESSION_STATES) {
+      let oldestKey = null, oldestTime = Infinity;
+      for (const [ek, ev] of sessionStates.entries()) {
+        if (ev.status !== "busy" && ev.lastActiveAt < oldestTime) {
+          oldestTime = ev.lastActiveAt;
+          oldestKey = ek;
+        }
+      }
+      if (oldestKey) {
+        const oldState = sessionStates.get(oldestKey);
+        if (oldState && oldState.revertTimer) {
+          try { clearTimeout(oldState.revertTimer); } catch (_) {}
+        }
+        sessionStates.delete(oldestKey);
+      }
+    }
+    return s;
+  }
+
   // ---------- 按钮 ----------
   let btn = null;
-  let busy = false;
-  let original = null;
-  let revertTimer = null;
 
   function setButton(mode) {
     if (!btn) return;
@@ -677,7 +808,7 @@
     btn.setAttribute("data-mode", mode);
     btn.setAttribute("title", tip);
     btn.setAttribute("aria-label", tip);
-    btn.disabled = busy;
+    btn.disabled = (mode === "busy");
     btn.innerHTML = "";
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
@@ -687,16 +818,79 @@
     btn.appendChild(svg);
   }
 
-  function armRevert() {
-    clearTimeout(revertTimer);
-    setButton("revert");
-    revertTimer = setTimeout(() => {
-      original = null;
-      setButton("idle");
+  function syncButtonToSession(key) {
+    if (!btn) return;
+    const s = getSessionState(key);
+    if (s.status === "busy") setButton("busy");
+    else if (s.status === "revert") setButton("revert");
+    else setButton("idle");
+  }
+
+  function checkSessionSwitch() {
+    const curKey = getActiveSessionKey();
+    if (curKey !== activeSessionKey) {
+      const prevKey = activeSessionKey;
+      activeSessionKey = curKey;
+      diag.currentSessionKey = curKey;
+      diag.lastSessionSwitch = { from: prevKey, to: curKey, at: Date.now() };
+
+      // 切换到了新会话：同步按钮状态
+      syncButtonToSession(curKey);
+
+      // 如果当前会话之前曾切走，现在切回来了，且有暂存的润色结果：
+      checkPendingApply(curKey);
+    }
+    return curKey;
+  }
+
+  function checkPendingApply(key) {
+    const s = getSessionState(key);
+    if (s.status === "pending_apply" && s.enhanced) {
+      const el = findInput();
+      if (!el) return;
+      const curText = readText(el).trim();
+      const origText = (s.original || "").trim();
+      // 如果切回时，输入框依然是当时的原草稿（或为空，未被用户二次修改）：
+      if (!curText || curText === origText) {
+        if (writeText(el, s.enhanced)) {
+          s.status = "revert";
+          armRevert(key, s.original);
+          syncButtonToSession(key);
+          toast("已恢复并应用该会话的润色结果（来自「" + (s.modelUsed || "当前模型") + "」）");
+          return;
+        }
+      }
+      // 如果输入框已被用户改动为新内容，为保护用户当前编辑，不自动覆盖
+      toast("该会话有一份润色结果已就绪（由于输入框已有内容，未自动覆盖）", 6000);
+      s.status = "idle";
+      syncButtonToSession(key);
+    }
+  }
+
+  function armRevert(sessionKey, originalText) {
+    const s = getSessionState(sessionKey);
+    if (s.revertTimer) {
+      try { clearTimeout(s.revertTimer); } catch (_) {}
+    }
+    s.status = "revert";
+    s.original = originalText;
+    s.revertTimer = setTimeout(() => {
+      s.original = null;
+      s.status = "idle";
+      s.revertTimer = null;
+      if (getActiveSessionKey() === sessionKey) {
+        syncButtonToSession(sessionKey);
+      }
     }, REVERT_WINDOW_MS);
   }
 
+  let taskCounter = 0;
+
   async function enhance() {
+    const curKey = checkSessionSwitch();
+    const s = getSessionState(curKey);
+    if (s.status === "busy") return;
+
     const el = findInput();
     if (!el) { toast("没找到输入框"); return; }
     const text = readText(el).trim();
@@ -708,20 +902,37 @@
       return;
     }
 
-    busy = true;
-    setButton("busy");
+    const taskId = ++taskCounter;
+    s.taskId = taskId;
+    s.status = "busy";
+    s.original = text;
+    s.enhanced = null;
+    syncButtonToSession(curKey);
+
     const m = currentModel();
-    diag.lastRequest = { modelValue: m.value, modelLabel: m.label, chars: text.length,
-                         override: override || null };
+    diag.lastRequest = {
+      sessionKey: curKey,
+      taskId: taskId,
+      modelValue: m.value,
+      modelLabel: m.label,
+      chars: text.length,
+      override: override || null
+    };
+
     try {
-      // 右键菜单选中的模型随请求一起传（主进程 explicit 档，最高优先级）：
-      // 即使 enhance_config.json 写入失败或被别处改动，这一次点击也一定用它。
       const res = await api.enhancePrompt(text, m.value, m.label, override || undefined);
+
+      // 若任务已被本会话的新操作取代，丢弃过期响应
+      if (s.taskId !== taskId) return;
+
       diag.lastResult = res && res.success
         ? { model: res.model, provider: res.provider, how: res.how, chars: String(res.text || "").length }
         : { code: (res && res.code) || "unknown", error: String((res && res.error) || "未知错误") };
+
       if (!res || !res.success) {
-        // 「模型不可用」是配置问题，不是网络问题 —— 给出可执行的下一步，而不是甩一个 HTTP 400
+        s.status = "idle";
+        if (getActiveSessionKey() === curKey) syncButtonToSession(curKey);
+
         const tip = String((res && res.tip) || "");
         const head = "增强失败：" + String((res && res.error) || "未知错误");
         const body = tip ? ("\n→ " + tip) : "";
@@ -731,37 +942,107 @@
         }
         return;
       }
+
       const enhanced = String(res.text || "").trim();
-      if (!enhanced) { toast("增强失败：模型返回空内容", 5200); return; }
-      original = text;
-      if (!writeText(el, enhanced)) {
+      if (!enhanced) {
+        s.status = "idle";
+        if (getActiveSessionKey() === curKey) syncButtonToSession(curKey);
+        toast("增强失败：模型返回空内容", 5200);
+        return;
+      }
+
+      s.enhanced = enhanced;
+      s.modelUsed = res.model || "当前模型";
+
+      // ★★★ 核心防护：会话切换检测 ★★★
+      const activeKeyNow = getActiveSessionKey();
+      const curInput = findInput();
+      const curTextNow = curInput ? readText(curInput).trim() : "";
+
+      // 判定是否真正切换了会话：
+      // 1. 若当前输入框仍存在，且内容依然等于发起时的原文（或为空，用户未做二次修改），说明用户就在原输入框前等待润色，绝非跨会话污染；
+      // 2. 只有当 curKey 与 activeKeyNow 均为明确持久化的不同会话 ID（非 draft/default/ephemeral 占位），或当前输入框内容已被用户改写为全新文本时，才判定为用户确实已切走。
+      const isDefiniteDifferentSession = (
+        curKey.startsWith("sess:") &&
+        activeKeyNow.startsWith("sess:") &&
+        curKey !== activeKeyNow &&
+        !curKey.includes("draft") &&
+        !activeKeyNow.includes("draft") &&
+        !curKey.includes("default") &&
+        !activeKeyNow.includes("default")
+      );
+
+      const userEditedNewContent = curTextNow && curTextNow !== text;
+      const trulySwitchedAway = isDefiniteDifferentSession || (activeKeyNow !== curKey && userEditedNewContent);
+
+      if (trulySwitchedAway) {
+        // 用户确实已经切换到其他会话！
+        // 绝对不得写入当前切换后的会话输入框！
+        s.status = "pending_apply";
+        diag.preventedCrossSessionPollution = {
+          from: curKey,
+          to: activeKeyNow,
+          chars: enhanced.length,
+          at: Date.now()
+        };
+        toast("原会话提示词润色已完成（已保存在原会话，未写入当前会话）", 4500);
+        return;
+      }
+
+      // 仍在原编辑环境中：写回输入框
+      if (!curInput || !writeText(curInput, enhanced)) {
+        s.status = "idle";
+        syncButtonToSession(curKey);
         toast("已生成结果但写回输入框失败，请手动复制：\n" + enhanced.slice(0, 200), 8000);
         return;
       }
-      armRevert();
-      toast("已用「" + (res.model || "当前模型") + "」增强");
+
+      // 如果会话键在此期间由草稿分配了真实 ID，同步更新状态
+      if (activeKeyNow !== curKey) {
+        const newS = getSessionState(activeKeyNow);
+        newS.original = text;
+        newS.enhanced = enhanced;
+        newS.modelUsed = res.model || "当前模型";
+        armRevert(activeKeyNow, text);
+        syncButtonToSession(activeKeyNow);
+      } else {
+        armRevert(curKey, text);
+        syncButtonToSession(curKey);
+      }
+
+      const toastTip = (res && res.fallbackTip) ? (" " + res.fallbackTip) : "";
+      toast("已用「" + (res.model || "当前模型") + "」增强" + toastTip);
+
     } catch (err) {
+      if (s.taskId === taskId) {
+        s.status = "idle";
+        if (getActiveSessionKey() === curKey) syncButtonToSession(curKey);
+      }
       diag.lastResult = { code: "exception", error: String(err) };
       toast("增强异常：" + String((err && err.message) || err), 5200);
-    } finally {
-      busy = false;
-      if (btn) {
-        if (btn.getAttribute("data-mode") === "revert") btn.disabled = false;
-        else setButton("idle");
-      }
     }
   }
 
   function onRevert() {
+    const curKey = checkSessionSwitch();
+    const s = getSessionState(curKey);
+    if (s.status !== "revert" || s.original == null) return;
+
     const el = findInput();
-    if (el && original != null) writeText(el, original);
-    original = null;
-    clearTimeout(revertTimer);
-    setButton("idle");
+    if (el) writeText(el, s.original);
+
+    if (s.revertTimer) {
+      try { clearTimeout(s.revertTimer); } catch (_) {}
+      s.revertTimer = null;
+    }
+    s.original = null;
+    s.status = "idle";
+    syncButtonToSession(curKey);
   }
 
   function ensureButton() {
     ensureStyle();
+    checkSessionSwitch();
     const input = findInput();
     if (!input) { if (btn) { btn.remove(); btn = null; } diag.hiddenReason = "未找到输入框"; return; }
     try { const cur = currentModel(); if (cur.value || cur.label) diag.currentModel = cur; } catch (_) {}
@@ -797,6 +1078,9 @@
     diag.mountWhere = mount.where;
 
     if (btn && btn.isConnected) {
+      // 保持按钮状态与当前会话一致
+      syncButtonToSession(activeSessionKey || getActiveSessionKey());
+
       // ★ 位置自愈：按钮虽还在文档里，但已不在正确容器内（如之前误挂在侧边栏、
       //   客户端重渲染把按钮连同旧节点一起搬走 / 被消息列表的 DOM 复用吞掉）→ 主动搬回来。
       const okPlace = btn.parentElement === host;
@@ -814,8 +1098,10 @@
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (busy) return;
-      if (btn.getAttribute("data-mode") === "revert") onRevert();
+      const curKey = checkSessionSwitch();
+      const s = getSessionState(curKey);
+      if (s.status === "busy") return;
+      if (s.status === "revert") onRevert();
       else enhance();
     });
     // 右键 = 选模型（不触发左键的增强/还原）
@@ -825,12 +1111,19 @@
       openMenu();
     });
     place(btn, host, mount.where);
-    setButton("idle");
+    syncButtonToSession(activeSessionKey || getActiveSessionKey());
     diag.buttonAttached = true;
   }
 
   function start() {
     ensureStyle();
+    checkSessionSwitch();
+    // 监听文档层级点击，零延迟感知会话切换并同步按钮状态
+    try {
+      document.addEventListener("click", () => {
+        setTimeout(checkSessionSwitch, 0);
+      }, { passive: true });
+    } catch (_) {}
     // 彻底移除 document.body 的 MutationObserver，杜绝长会话挂载时的底层 C++ 监听负荷。
     // 输入框属常驻组件，500ms 巡检可确保在页面视图切换后及时挂载，且在正常停留时近乎零开销。
     setInterval(() => { if (!document.hidden) ensureButton(); }, 500);
