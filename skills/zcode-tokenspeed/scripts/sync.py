@@ -389,6 +389,11 @@ def check_state(args) -> str:
     # 否则落到 unknown，run_sync 会把它当失败而不是「等退出后还原」。
     if "待还原" in out:
         return "off"
+    # 品牌名替换的带名字模式 = 改名：输出「待写入」。
+    # 与「待还原」同理，必须映射成 off，否则改名请求会落到 unknown，
+    # run_sync 报「状态未知」，补丁永远不会被排期（实测踩过）。
+    if "待写入" in out:
+        return "off"
     # 文本替换类补丁（品牌名 / 窗口 ID 修复）用 [=] 表达「目标状态已达成」，
     # 措辞是「保持原样」「已是目标内容」「目标不存在」——都不含「已打」。
     # 不识别它们会落到 unknown，run_sync 里 unknown 走 failed 分支（误报失败）。

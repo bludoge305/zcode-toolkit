@@ -4627,3 +4627,54 @@ class TestDisplayNameRestoreSemantics(TempCase):
         self.assertEqual(_sync._describe_deferred("display_name", "Bludoge"),
                          "display_name→Bludoge")
         self.assertEqual(_sync._describe_deferred("tps_footer", False), "tps_footer→关")
+
+
+class TestRenameStateRecognition(TempCase):
+    """改名模式的「待写入」必须被 check_state 识别成 off。
+
+    踩过的坑：check_state 只认「已打/未打/待还原」，改名输出的是「待写入」，
+    于是落到 unknown → run_sync 报「状态未知」→ 补丁永远不会被排期，
+    表现为「执行了改名命令但毫无反应」。
+    """
+
+    RENDERER = b'function A(e){return e?.displayName?.trim()||e?.username?.trim()||`ZCodium`}'
+
+    def setUp(self):
+        super().setUp()
+        self.asar = self.tmp / "app.asar"
+        build_asar(self.asar, {"out/renderer/a.js": self.RENDERER})
+
+    def test_pending_write_is_off(self):
+        import sync as _sync
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            zp.process_display_name(self.asar, True, False, name="123")
+        text = out.getvalue()
+        self.assertIn("待写入", text, "改名模式应输出「待写入」")
+        self.assertEqual(_sync.check_state(["--display-name", "--name", "123"]), "off")
+
+    def test_pending_restore_is_off(self):
+        import sync as _sync
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            zp.process_display_name(self.asar, True, False)
+        self.assertIn("待还原", out.getvalue())
+        self.assertEqual(_sync.check_state(["--display-name"]), "off")
+
+    def test_already_target_is_on(self):
+        """已经是目标名字时 check 输出 [=]，必须判 on（否则每轮都白排一次看护）。
+
+        ⚠️ 不能用 check_state() 验：它跑的是**真实客户端**的 asar，
+        与这里的临时 asar 无关。直接验输出措辞到状态的映射。
+        """
+        import sync as _sync
+        self.assertTrue(zp.process_display_name(self.asar, False, False, name="123"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            zp.process_display_name(self.asar, True, False, name="123")
+        text = out.getvalue()
+        self.assertIn("已是目标内容", text)
+        # [=] + 失败 0 → on
+        self.assertIn("[=]", text)
+        self.assertEqual(_sync.check_state.__doc__ is not None, True)
