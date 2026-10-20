@@ -2,7 +2,7 @@
 
 <p align="left">
   <a href="https://github.com/bludoge305/zcode-toolkit/tree/zcodium-toolkit"><img src="https://img.shields.io/badge/branch-zcodium--toolkit-2ea44f?style=flat-square" alt="Branch"></a>
-  <a href="https://github.com/bludoge305/zcode-toolkit/blob/zcodium-toolkit/CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.6.37-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/bludoge305/zcode-toolkit/blob/zcodium-toolkit/CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.6.38-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -720,6 +720,67 @@ python "<skill目录>/scripts/zcode_patcher.py" --tps-footer --revert
 5. 如不再使用，移除 `bludoge305/zcode-toolkit` 市场。
 
 如果客户端已经异常到无法启动，改用 `restore_clean.py --latest`。
+
+<details>
+<summary><b>📜 历史版本审计与故障排查记录</b></summary>
+
+> 以下为**上游原版 ZCode** 的历史记录（0.6.5 – 0.6.16）。本 fork 自 0.6.20 起独立演进，
+> ZCodium 适配与后续变更见 [CHANGELOG.md](CHANGELOG.md)。
+
+#### 0.6.16（解决思考档位关闭导致退出无限重启死循环，Issue #5）
+- **语义修正为“不托管”**：3.14+ 思考档位配置目标为客户端自带的 `provider_config.json`；当开关关闭时语义明确为“停止托管与同步”，插件不再主动写入，且绝不主动还原该文件，彻底切断“退出还原 → 客户端重启写回 → 再次检测冲突 → 再次看护还原”的无限死循环；
+- **看护空任务守卫**：`apply_after_exit.py` 严格过滤 `reasoning_config=off` 任务；若最终无待执行补丁任务，看护直接安全退出，杜绝空任务挂起等待与退出自动重启 ZCode。
+- **全平台兼容吸收**：完整吸纳 PR #4 对 macOS 看护链路的跨平台支持与 crashpad 僵尸进程排除。
+
+#### 0.6.20（彻底修复提示词润色失败与“显示已完成但不出现文案”问题）
+- **根治会话隔离误杀（不出现润色文案）**：重构跨会话防护判定，当当前输入框依然处于聚焦/就绪状态且文本未被篡改时，直接写入润色结果；改进草稿会话临时键生成机制，杜绝 DOM 重绘导致的虚假跨会话切换误杀（不再提示“原会话提示词润色已完成未写入当前会话”）；
+- **深度思考（Reasoning）与空内容兜底**：适配 DeepSeek-R1、GLM-5.3 等带深度思考的模型，当 `content` 处于空字符串时自动从 `reasoning_content` 提取润色文本，消除“模型返回了空内容”误报；
+- **智能故障转移（Fallback Recovery）**：当当前所选模型遭遇余额不足（400/402）、上游超时、服务异常或返回空回复时，自动无缝尝试其他可用供应商的备用模型完成润色并给出友好提示，彻底避免润色中断；
+- **补齐 Anthropic 必填协议头**：针对 `anthropic-messages` 协议自动补齐 `anthropic-version: 2023-06-01` 请求头，解决部分中转站与官方端点 400 Bad Request 拒绝问题。
+
+#### 0.6.19（对齐官方开源代码仓库规范与深度全方位优化）
+- **DOM 锚点全面对齐官方 `test-ids` 契约**：根据上游官方开源代码规范（`v3.15.1`，commit `aac4755`），重构模型拉取按钮挂载点（对齐 `[data-testid="model-provider-add-model-button"]`）、提示词增强与思考强度滑条探针（优先对接官方 `[data-testid="v4-model-config"]`），彻底根除基于脆弱文案或坐标扫描的失效隐患；
+- **TPS 状态栏深度遥测与校准**：捕获官方下发的 `turnHeader.modelDurationMs`，扣除网络排队与流式波动，精准校准整轮纯模型生成速度；捕获 `usage.delta` 原生 `reasoningTokens` 与 `cacheWriteTokens`，实时与会话累计段新增思考 Token 消耗指标（`思考 xx` / `累思 xx`）；
+- **Composer 工具栏双态按钮追踪**：升级支持 `[data-testid='v4-composer-send'], [data-testid='v4-stop']`，在流式生成期间精准锁定工具栏位置，彻底消除回退漂移；
+- **用量图表补丁自适应正则匹配**：用量图表去截断补丁升级为弹性正则嗅探引擎，免受版本混淆压缩变量名变更影响；
+- **配置侧原生支持 `maxOutputTokens`**：`--reasoning-config` 同步引擎深度支持 `maxOutputTokens` CEL map 映射及上限写入，完美适配新版 OptionSpecs 规范；
+- **官方版本认证**：全量通过 316+ 项单元与集成测试，实测认证覆盖 3.11.2 ~ 3.15.1。
+
+#### 0.6.15（彻底根治会话生成中润色模型漂移与失败问题）
+- **会话粘性记忆与侧边栏隔离**：`zcode-enhance-prompt.js` 引入 `lastKnownModel` 会话粘性记忆，流式生成中当原生工具栏处于禁用/重绘瞬态时无缝沿用该会话最新选中的模型；全局搜索强制排除侧边栏，杜绝抓取辅助对话的模型；
+- **跨脚本实时事件信源联动**：`zcode-tps.js` 捕获 ServicePort 事件流的底层实时 `ev.modelId` 并暴露全局，形成模型定位双保险；
+- **主进程坚守当前供应商**：`zcode_patcher.py` 优化解析引擎，中转站与自定义模型只要所属供应商有效即坚守在该供应商发请求，彻底杜绝越界 Fallback 到系统其他无关供应商导致 400 失败的问题。
+
+#### 0.6.14（TPS 状态栏优化：去除 out 替换为会话总用量）
+- **即时指标精简**：彻底去除含义模糊的单轮 `out`，本轮指标聚焦于「首 Token 延迟」与「生成速率」，视觉更清爽；
+- **会话总 Token 展示**：在会话累计组新增 `总用 xx` Token 消耗量统计（`累计输入 + 累计输出`），一目了然看清当前会话整体 Token 消耗。
+
+#### 0.6.13（提示词增强侧边栏隔离、看护批处理重打包与 3.14.5 适配）
+- **提示词增强侧边栏隔离**：`zcode-enhance-prompt.js` 补齐侧边栏边界判定（`isInsideSidePane`）与等高靠左优先保序，自愈分支杜绝误挂，彻底根治侧边栏辅助对话导致润色按钮飘移的竞态；
+- **看护批处理极速重打包**：`apply_after_exit.py` 重构任务调度引擎，同方向（应用或还原）多项补丁合并为单次批量调用，ASAR 重打包耗时从 20s+ 缩短至 2~3s，消除用户快速重启造成的进程冲突隐患；
+- **客户端版本认证**：完成最新客户端版本 `3.14.5` 实测认证，全量 250+ 项单元与集成测试全绿通过。
+
+#### 0.6.12（修复侧边栏辅助对话双 Composer 竞态跳动）
+- 修复当侧边栏开启「辅助对话」时双输入框在同一高度竞态导致 TPS 状态栏来回跳动的问题；
+- 新增 `isInsideSidePane` 与 `isInsideMainConversation` 边界判断，严格限定只在主界面对话框下显示，彻底消除跳动与轮次数据串台。
+
+#### 0.6.11（升级自愈与看护优化）
+- `sync.py` 引入客户端指纹比对，自动识别客户端升级并重置通知标记，自动调度看护；
+- `apply_after_exit.py` 补齐 7 项补丁，并实现 `_watchdog.pid` + `_watchdog.want` 单例互斥与需求合并；
+- `doctor.py` 增加 `--fix` 一键自愈命令。
+
+#### 0.6.10（旧脚本失效检测）
+- 修复 `_process_script_inject` 的 check 分支仅检查结构未比对内容的缺陷，新增内容哈希比对并标记 stale。
+
+#### 0.6.8 - 0.6.9（TPS 精度与菜单交互）
+- 状态栏平均命中率改为精确到两位小数；
+- 优化提示词右键菜单的关闭机制，消除滚动与多频事件误关问题。
+
+#### 0.6.5（ASAR 布局错位保护）
+- 引入 `_AsarWriteLock` 进程锁与文件锁；
+- 全域逐条 integrity 校验，防范错位启动崩溃。
+
+</details>
 
 ---
 

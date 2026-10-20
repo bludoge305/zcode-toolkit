@@ -11,6 +11,26 @@
 
 ## 本 fork 维护线（2026-10）
 
+### 0.6.38 — 合并上游 0.6.20–0.6.22（增强提示词三项修复）
+
+合并 `c80361619/zcode-toolkit` 上游 3 个提交，全部围绕**提示词增强**：
+
+- **Lexical 富文本写入失效**（上游 0.6.21）：受控输入框用 `execCommand` 写入被框架覆盖，
+  表现为「提示完成但文案未更新」。改用原生 setter + input 事件派发。
+- **代理网关多层数据包裹解包**（上游 0.6.22）：中转站可能把响应包成
+  `{data:{choices:[...]}}` 甚至多层，导致 HTTP 200 但解析出空内容。新增递归解包 + 流式降级。
+- **润色失败与空文案**（上游 0.6.20）：基础链路修复。
+
+冲突处理：
+- `plugin.json` / `marketplace.json` / `README.md` 三处，均为版本号与文案；
+  保留本 fork 的 `display_name`、`window_id_fix` 两个开关（上游无），版本号取 0.6.38。
+- **核心代码零冲突**：`zcode_patcher.py`、`zcode-enhance-prompt.js`（847→1390 行）、
+  `zcode-model-puller.js`、`tests/test_patcher.py` 全部自动合并。
+
+验证：350 项 Python 测试全绿；上游 4 个 JS 测试
+（lexical_write / response_unwrapping / session_switch / mount_smoke）全部通过。
+
+
 ### 0.6.37 — 状态命令按配置目标名检查品牌名
 
 - **`/zcode-patch-status` 修好品牌名一项的误报**：它原先裸跑 `--display-name --check`，
