@@ -309,11 +309,19 @@ def batch_tasks(tasks: list[tuple[list[str], bool]]) -> list[tuple[list[str], bo
     return batched
 
 
-def _cleanup_singletons(cur_pid: int) -> None:
+def _cleanup_singletons(cur_pid: int, keep_wants: bool = False) -> None:
+    """清理单例状态。
+
+    keep_wants=True 时**保留 WANT_FILE**：用于「部分补丁失败」的收尾——
+    把失败项留在需求清单里，下次同步/退出时看护会继续尝试，而不是把待办直接吞掉。
+    （2026-10-28 实测：升级到 1.17.2 后 enhance_prompt 因杀软占用失败，want 被清空，
+      结果那一项就此丢失，直到用户下次手动跑 sync 才补回来。）
+    """
     try:
         if PID_FILE.is_file() and PID_FILE.read_text(encoding="utf-8").strip() == str(cur_pid):
             PID_FILE.unlink(missing_ok=True)
-        WANT_FILE.unlink(missing_ok=True)
+        if not keep_wants:
+            WANT_FILE.unlink(missing_ok=True)
     except Exception:
         pass
 
@@ -385,7 +393,8 @@ def main() -> int:
             failed += 1
 
     res, exe = resolve_install()
-    _cleanup_singletons(cur_pid)
+    # 有失败项时保留 want：下次退出/同步会继续尝试这些补丁，不让它们凭空消失。
+    _cleanup_singletons(cur_pid, keep_wants=(failed > 0))
     if exe is None:
         log("未找到客户端主程序（Windows: ZCode.exe / ZCodium.exe），请手动启动")
         return 1

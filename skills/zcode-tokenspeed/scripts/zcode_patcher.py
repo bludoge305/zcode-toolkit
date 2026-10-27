@@ -2358,14 +2358,21 @@ def _asar_walk_entries(node, path=""):
             yield p, ent
 
 
-def _replace_with_retry(tmp: Path, dst: Path, attempts: int = 5) -> None:
+def _replace_with_retry(tmp: Path, dst: Path, attempts: int = 8) -> None:
     """os.replace，遇到 Windows 瞬时占用时退避重试。
 
     WinError 5（拒绝访问）与 WinError 32（正被占用）在 Windows 上极常见：
     刚被别的进程读过的文件、杀软正在扫描的文件，句柄释放有几毫秒到几秒延迟。
     只做短退避重试，不做长等待 —— 真正的「ZCode 还在运行」由上层运行守卫拦截。
+
+    ★ 为什么重试要从 5 次/7.7s 拉长到 8 次/~40s（2026-10-28 实测）：
+      app.asar 有 300+ MB，杀软（Defender 等）在文件刚写入后会**整份扫描**，
+      期间该文件被独占，os.replace 连续失败。原来的窗口完全不够，表现为批量打补丁时
+      「前一个成功、后一个 WinError 5」——同一个退出窗口里，第一次重打包的产物刚生成
+      就被杀软抓住，第二次替换必然落败（升级到 1.17.2 后 enhance_prompt 就是这样丢的）。
+      这不是「客户端还在运行」（那种情况上层预检早拦住了），只是瞬时占用，所以留足等待。
     """
-    delay = 0.25
+    delay = 0.5
     for i in range(attempts):
         try:
             os.replace(tmp, dst)
@@ -2374,7 +2381,7 @@ def _replace_with_retry(tmp: Path, dst: Path, attempts: int = 5) -> None:
             if getattr(e, "winerror", None) not in (5, 32) or i == attempts - 1:
                 raise
             time.sleep(delay)
-            delay = min(delay * 2, 4.0)
+            delay = min(delay * 2, 8.0)
 
 
 class _AsarWriteLock:
