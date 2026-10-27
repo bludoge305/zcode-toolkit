@@ -1,116 +1,52 @@
 #!/usr/bin/env python3
 """
-ZCode 客户端补丁工具
-=====================
+ZCodium / ZCode 客户端补丁工具（ZCodium-toolkit fork）
+=====================================================
 
-对本地 ZCode 安装打两类补丁（均自动探测安装位置、独立备份、幂等）：
+对本地客户端安装打补丁（均自动探测安装位置、独立备份、幂等、可还原）：
 
-一、思维强度透传（内核 zcode.cjs，**仅 ≤3.11 需要**）
-  让「不在内核白名单里的模型」也遵循 config.json 里配置的思维强度档位。
-  原理：内核档位解析函数把档位翻译成线上参数
-  ({anthropic:{effort,thinking}} / {openaiCompatible:{reasoningEffort}})，
-  但参数表 providerOptionsByLevel 只给白名单模型（claude/glm/deepseek 等家族）下发；
-  自定义供应商模型拿到的是空表，档位被选中却不产生任何请求参数。
-  补丁在取参处加兜底：查表为空时直接用档位名合成参数——
-  白名单模型不受影响（它们的表非空，?? 短路）。
+一、用量页去截断（app.asar，--usage-chart）
+  「设置 → 用量」趋势图只画 Top6、饼图只画 Top5+其他模型。同长度字节级原地覆盖。
 
-  ⚠️ ZCode ≥ 3.14 换了机制：内核里已没有该解析函数，也没有 variants/defaultVariant，
-  档位改由配置侧 provider_config.json 的 optionSpecs.reasoningLevel 下发
-  （见 `--reasoning-config`）。此时本补丁会明确提示「不适用」，不要去打。
-
-  档位 -> anthropic thinking.budget_tokens 映射：
-    low=4000  medium=8000  high=16000  xhigh=32000  max=32000  其它档名=16000
-    disabled/none/off/nothink -> thinking disabled
-
-  生效条件（v2 config.json 中该模型，≤3.11）：
-    "reasoning": { "enabled": true, "variants": ["low","high","max"], "defaultVariant": "max" }
-
-二、用量页去截断（app.asar，--usage-chart）
-  设置→用量 的趋势图只画 Top6 模型、饼图只画 Top5 并把其余合并为「其他模型」。
-  补丁解析 asar 头定位渲染文件，把截断表达式替换为全量版本，
-  空格补齐到原字节长度后原地覆盖（asar 头/offset/unpacked 零改动）。
-  原始字节备份在 app.asar.chart-patch.json，可整体还原。
+二、模型弹窗加宽（app.asar，--model-width）
+  模型选择浮窗 192px → 320px，长模型名不再被截断。
 
 三、TPS 统计栏（app.asar，--tps-footer）
-  向渲染层 out/renderer/index.html 注入 zcode-tps.js（读 ServicePort 事件流得精确
-  tok/s/首 token/out；脚本内不调用 port.start()，否则 3.12.2 会卡启动）：
-  输入框**下方**常驻统计条（默认位置），左组=本轮即时指标（首 token/tok/s/out）、
-  右组=会话累计（第 N 轮/输入/命中+命中率/累出），空会话显示空态绿点常驻；
-  胶囊右键可切「输入框下方（默认）/ 输入框工具栏 / 会话顶部 sticky」，localStorage 记忆。
-  数据取自页面内 MessagePort 会话事件流，无常驻服务。
-  重打包级修改：整体重排 asar 目录、对改动文件重算 integrity。
-  原件备份 app.asar.tps.bak（带指纹 meta），记录在 app.asar.tps-patch.json，可整体还原。
+  输入框下方常驻统计条：本轮指标（首 token / tok/s）+ 会话累计。重打包级。
 
 四、思考强度吸附滑条（app.asar，--thought-slider）
-  向工具栏原生「思考级别」下拉旁注入 zcode-thought-slider.js：横向吸附拖拽条，
-  档位动态取自原生状态探针（data-thought-levels，模型配几档吸几档），拖完经
-  React fiber 直调原生 onValueChange（降级：模拟点开原生菜单按序点选），等价
-  于用户点选菜单项 → 内核 session/setThoughtLevel，会话内即时生效。
-  注入/备份/还原与 TPS 同链路：app.asar.slider.bak + app.asar.slider-patch.json。
+  工具栏「思考 · 档名」入口，拖拽即换档，经 React fiber 走原生链路。重打包级。
 
 五、模型拉取按钮（app.asar，--model-puller）
-  设置页注入「⚡️ 自动拉取模型」按钮：拉取供应商 /models 接口 → 弹窗勾选 → 写入
-  config.json（整读整写、已有条目原样保留，含手改的 reasoning.variants）。
-  四处改动：out/renderer/ 新增 zcode-model-puller.js + index.html 挂载 +
-  preload 暴露 3 个 IPC 方法（readConfigFile/writeConfigFile/fetchModelsFromUrl）+
-  main 注册 3 个 IPC handler（读写 ~/.zcode/v2/config.json、代理拉模型列表）。
-  前端脚本基于 MIT 许可的社区项目二次开发（见 NOTICE.md）；
-  preload/main 锚点用语义字符串定位（exposeInMainWorld("zcode",{ / SaveMcpToUserDirectory），
-  压缩符号经正则捕获，跨版本无需维护符号表。
-  原件备份 app.asar.puller.bak，记录在 app.asar.puller-patch.json，可整体还原。
-  另有命令行版 scripts/model_pull.py：不动 asar，直接同步 config.json。
+  设置页一键拉取供应商 /models 列表并批量写入。重打包级。
 
-七、增强提示词（app.asar，--enhance-prompt）
-  在输入框工具栏注入「增强提示词」按钮：取当前草稿 → 经 preload 桥 / main handler 用
-  **选定**的模型调一次对话补全 → 写回输入框，按钮临时变「恢复原文」可一键还原。
-  **在按钮上右键**弹出模型选择菜单（按供应商分组，只列可用模型）：选中即写进
-  enhance_config.json（零重启生效、重启后沿用），本次点击同时经 override 参数走
-  **explicit 档**（最高优先级），文件写入失败也不会用错模型。
-  模型解析共六档：explicit → config → ref → ref-label → label → fallback。
-  提示词模板内置（_ENHANCE_SYSTEM_PROMPT / _ENHANCE_USER_TEMPLATE）：保持原语言、只输出改写结果、
-  不回答问题、不加解释。四组件注入与还原走与模型拉取按钮同一套通用链路
-  （_process_ipc_patch），preload/main 注入段按 /*zp:begin:<块名>*/ 标记定界，两者互不干扰。
+六、增强提示词（app.asar，--enhance-prompt）
+  输入框旁一键润色草稿；右键可选润色所用模型。重打包级。
 
-六、思考档位配置（配置侧，--reasoning-config，**3.14+ 用这个替代内核补丁**）
-  3.14 起档位机制改为「配置侧原生」：档位列表与请求参数都由 provider_config.json 的
-  config.modelConfigRules.providerModelRules[].config.optionSpecs.reasoningLevel 提供
-  （values = 界面档位、末位即默认；map = CEL 表达式，请求发出前由内核
-  createModelOptionMapFetch 合并进请求体）。config.json 里的 reasoning.variants 已失效。
-  本命令把 config.json 里各模型已配的档位（旧 variants 或已有 optionSpecs）迁移进
-  provider_config.json，使自定义模型的档位在新内核上真正下发；--check 看现状、
-  --revert 从 provider_config.json.reasoning-bak 还原。
-  与界面「手动配置」过的模型（manualProviderModelRules）冲突时不迁移（内核 schema 禁止
-  同一模型同时出现在两个规则列表，否则整个供应商配置会降级为空）。
+七、品牌名替换（app.asar，--display-name --name <名字>）
+  把界面显示名的兜底字面量换成自定义名字；不传 --name 时强制写回 ZCodium。
+
+注：本 fork 已移除「思考档位内核补丁（≤3.11）」「3.14+ 档位配置（--reasoning-config）」
+与「窗口 ID 缺陷修复（--window-id-fix）」三个模块——目标客户端为 ZCodium（optionSpecs
+原生档位机制，且窗口缺陷上游已修），这三项在此发行版上或不需要或已无目标。
 
 用法：
   python zcode_patcher.py --all --check         # 【推荐第一步】一条命令体检全部功能，只读不改
-  python zcode_patcher.py --all                 # 一次打上全部补丁（先完全退出 ZCode）
+  python zcode_patcher.py --all                 # 一次打上全部补丁（先完全退出客户端）
   python zcode_patcher.py --all --revert        # 一次还原全部补丁
-  python zcode_patcher.py                       # 思维强度补丁：自动探测全部安装并打（幂等）
-  python zcode_patcher.py --check               # 只看思维强度补丁状态
-  python zcode_patcher.py --revert              # 还原内核备份
-  python zcode_patcher.py --extract             # 提取当前内核锚点（新版本无已知锚点时）
-  python zcode_patcher.py --reasoning-config    # 【3.14+ 推荐】档位写进 provider_config（原生机制，无需内核补丁）
-  python zcode_patcher.py --usage-chart         # 用量页去截断（同样支持 --check/--revert）
-  python zcode_patcher.py --tps-footer          # TPS 统计栏注入（同样支持 --check/--revert）
-  python zcode_patcher.py --thought-slider      # 思考强度吸附滑条（同样支持 --check/--revert）
-  python zcode_patcher.py --model-puller        # 模型拉取按钮注入（同样支持 --check/--revert）
-  python zcode_patcher.py --enhance-prompt      # 增强提示词按钮注入（同样支持 --check/--revert）
-  python zcode_patcher.py "D:\\ZCode"           # 只处理指定安装（安装根目录或 zcode.cjs 均可）
+  python zcode_patcher.py --usage-chart         # 单项打补丁（同样支持 --check/--revert）
+  python zcode_patcher.py --display-name --name <名字>
+  python zcode_patcher.py <安装根目录>          # 例：python zcode_patcher.py "D:/Apps/ZCodium"
 
 通用开关：
-  --all       对所有功能生效（等价于同时给出下面全部补丁参数；配合 --check / --revert 用）
-  --dry-run   只报告将要做的改动，不写盘（所有补丁通用）
-  --force     跳过备份指纹校验（备份与当前文件对不上时强制继续，慎用）
-  --verbose   打印安装探测的每一步结果（定位不到安装时用）
+  --all       对所有功能生效
+  --dry-run   只报告将要做的改动，不写盘
+  --force     跳过备份指纹校验（慎用）
+  --verbose   打印安装探测细节
 
 注意：
-  * ZCode 升级会覆盖 zcode.cjs 与 app.asar，升级后需重新执行对应补丁；升级后首次打补丁
-    会自动归档旧版本的 .bak（备份带指纹），避免还原时把旧内核盖回新客户端。
-  * 打完补丁完全退出并重启 ZCode 后生效；打补丁前请先完全退出 ZCode（脚本会预检）。
-  * ZCode ≥ 3.14 的内核已换成「配置侧原生档位」：档位参数由 provider_config.json 的
-    optionSpecs.reasoningLevel 下发，**不需要内核补丁**——用 --reasoning-config 配置即可。
-    此时内核补丁会明确提示「本版本无需补丁」而不是报「锚点匹配异常」。
+  * 客户端升级会覆盖 app.asar，升级后需重新执行对应补丁（看护会自动重打）。
+  * 打完补丁完全退出并重启客户端后生效；打补丁前请先完全退出（脚本会预检）。
 """
 
 import argparse
@@ -172,7 +108,6 @@ def _is_client_name(name: str) -> bool:
 
 # 全部补丁的命令行参数名：--all 会一次性把它们打开（新增补丁时只需加进这里）
 ALL_PATCH_FLAGS = (
-    "reasoning_config",   # 3.14+ 档位配置（配置侧原生）
     "usage_chart",
     "model_width",
     "tps_footer",
@@ -180,7 +115,6 @@ ALL_PATCH_FLAGS = (
     "model_puller",
     "enhance_prompt",
     "display_name",       # 品牌兜底名替换（ZCodium → 自定义）
-    "window_id_fix",      # disposeWindow(browserWindowId) 缺陷修复
 )
 
 
@@ -215,9 +149,6 @@ RE_NAME_PRIMARY_REV = re.compile(
 )
 # 头像首字母兜底（`Z`)[0]?.toUpperCase()）——是首字母不是显示名，必须排除。
 RE_NAME_INITIAL_TAIL = re.compile(rb"\s*[`\"']?\s*\)\s*\[\s*0\s*\]")
-# ZCodium 1.0.2 打包缺陷：同一作用域内实际变量是 n（= e.webContents.id），
-# disposeWindow 却引用了不存在的 browserWindowId，关窗时抛 ReferenceError。
-RE_WINDOW_ID_BUG = re.compile(rb"\.disposeWindow\s*\(\s*browserWindowId\s*\)")
 
 
 def _expand_all(args) -> None:
@@ -229,165 +160,11 @@ def _expand_all(args) -> None:
     for name in ALL_PATCH_FLAGS:
         setattr(args, name, True)
 
-# 兜底合成器：档位名 -> 各协议命名空间的线上参数
-# openai 侧按「原名透传」：智谱系自定义网关（如 workbuddy2api）的档位表是 low/high/max，
-# 折算 max→xhigh 会被网关按 supported_efforts 降级成 high（max 档丢失）；
-# 关闭档发 reasoning_effort:"off" 而非省略——省略会让上游落到默认档（glm-5.3 默认≈max，关不掉），
-# 发 "off" 在带档位表的网关会被 floor 到最低支持档，网关特判 canDisableThinking 后即真·关闭。
-HELPER = (
-    'function zCfgEffort(e){'
-    'let t=String(e).toLowerCase();'
-    'if(t==="disabled"||t==="none"||t==="off"||t==="nothink")'
-    'return{anthropic:{thinking:{type:"disabled"}},openaiCompatible:{reasoningEffort:"off"}};'
-    'if(t==="enabled"||t==="on")'
-    'return{anthropic:{effort:"high",thinking:{type:"enabled",budgetTokens:16e3}},'
-    'openaiCompatible:{reasoningEffort:"high"}};'
-    'let r={low:4e3,medium:8e3,high:16e3,xhigh:32e3,max:32e3}[t]??16e3,'
-    'n={anthropic:{thinking:{type:"enabled",budgetTokens:r}},openaiCompatible:{},openai:{}};'
-    '["low","medium","high","xhigh","max"].includes(t)&&(n.anthropic.effort=t);'
-    '["none","minimal","low","medium","high","xhigh","max"].includes(t)&&'
-    '(n.openaiCompatible.reasoningEffort=t,n.openai.reasoningEffort=t);'
-    'return n}'
-)
-
-MARKER = "zCfgEffort"
-
 # --verbose：打印安装探测与备份校验的细节（定位不到安装、备份指纹异常时用）
 VERBOSE = False
 
-# 已知版本的档位解析函数原文（全文唯一锚点；符号名随构建版本变化）。
-# 新版本若两版锚点都匹配不上，按文档《自定义思考等级指南》重新提取锚点后加一版。
-ANCHORS = {
-    "3.8.1": (
-        "function sD(e,t,r){if(!e)return;let n=G_e(e,r);"
-        "if(!n?.enabled||n.levels.length===0)return;"
-        "let o=t?.trim(),i=Fgo(e,o,n.levels);if(o&&!i)return;"
-        "let a=i??gXe(n);"
-        'return a?{level:a,providerOptions:n.providerOptionsByLevel?.[a]}:void 0}'
-    ),
-    "3.9.1": (
-        "function AD(e,t,r){if(!e)return;let n=Zye(e,r);"
-        "if(!n?.enabled||n.levels.length===0)return;"
-        "let o=t?.trim(),i=fxo(e,o,n.levels);if(o&&!i)return;"
-        "let a=i??utt(n);"
-        'return a?{level:a,providerOptions:n.providerOptionsByLevel?.[a]}:void 0}'
-    ),
-    "3.9.2": (
-        "function RD(e,t,r){if(!e)return;let n=Xye(e,r);"
-        "if(!n?.enabled||n.levels.length===0)return;"
-        "let o=t?.trim(),i=Sxo(e,o,n.levels);if(o&&!i)return;"
-        "let a=i??ptt(n);"
-        'return a?{level:a,providerOptions:n.providerOptionsByLevel?.[a]}:void 0}'
-    ),
-    "3.11.2": (
-        "function mN(e,t,r){if(!e)return;let n=k2e(e,r);"
-        "if(!n?.enabled||n.levels.length===0)return;"
-        "let o=t?.trim(),i=CIo(e,o,n.levels);if(o&&!i)return;"
-        "let s=i??_nt(n);"
-        'return s?{level:s,providerOptions:n.providerOptionsByLevel?.[s]}:void 0}'
-    ),
-}
-
-
-def replacement_for(anchor: str) -> str:
-    """锚点函数前插入兜底合成器，返回处在查表后追加 ?? 兜底。
-    兼容不同版本的局部变量名（3.8.1/3.9.1 用 a，3.11.2 用 s）。"""
-    m = re.search(r"return (\w+)\?\{level:\1,providerOptions:n\.providerOptionsByLevel\?\.\[\1\]\}", anchor)
-    if not m:
-        raise ValueError(f"锚点返回表达式形态未识别：{anchor[-160:]}")
-    var = m.group(1)
-    patched_return = (
-        f"return {var}?{{level:{var},"
-        f"providerOptions:n.providerOptionsByLevel?.[{var}]??zCfgEffort({var})}}:void 0}}"
-    )
-    head = anchor[:m.start()]
-    return HELPER + head + patched_return
-
-
-# ---------------------------------------------------------------- 锚点自动提取
-
-def extract_anchor(target: Path) -> str | None:
-    """
-    按结构特征（而非符号名）在内核中定位档位解析函数，返回可直接加入 ANCHORS 的锚点。
-    特征：函数以 {level:...,providerOptions:...providerOptionsByLevel?.[...]}:void 0} 收尾。
-    已打补丁的文件自动回退到 .bak 原始件提取。
-    """
-    bak = target.with_suffix(".cjs.bak")
-    try:
-        data = target.read_text(encoding="utf-8", errors="surrogatepass")
-    except PermissionError:
-        print(f"[!] 无权限读取 {target}")
-        return None
-    if MARKER in data and bak.is_file():
-        data = bak.read_text(encoding="utf-8", errors="surrogatepass")
-        print(f"[*] 当前文件已打补丁，改从原始备份提取锚点")
-
-    candidates = set()
-    start = 0
-    while True:
-        idx = data.find("providerOptionsByLevel?.[", start)
-        if idx == -1:
-            break
-        start = idx + 1
-        fstart = data.rfind("function ", 0, idx)
-        if fstart == -1:
-            continue
-        brace = data.find("{", fstart)
-        depth, j = 0, brace
-        while j < len(data):
-            if data[j] == "{":
-                depth += 1
-            elif data[j] == "}":
-                depth -= 1
-                if depth == 0:
-                    break
-            j += 1
-        cand = data[fstart:j + 1]
-        if "{level:" in cand and cand.endswith("}:void 0}") and "function " not in cand[len("function "):]:
-            candidates.add(cand.replace("??zCfgEffort(a)", ""))
-
-    if not candidates:
-        print("[!] 未找到符合结构特征的候选，目标函数形态可能已变，需人工分析")
-        return None
-    if len(candidates) > 1:
-        print(f"[!] 找到 {len(candidates)} 个候选（应为 1），请人工甄别：")
-        for c in candidates:
-            print("    -", c[:150])
-        return None
-    return candidates.pop()
-
-
-# ---------------------------------------------------------------- 档位机制探测
-# 3.14 起内核换成「配置侧原生档位」：档位参数由 provider_config.json 的
-# optionSpecs.reasoningLevel.map（CEL 表达式）在请求发出前合并进请求体
-# （createModelOptionMapFetch → maps.apply(body, values)），档位列表也来自同一处
-# （optionSpecs.reasoningLevel.values → 模型目录 reasoning.levels）。
-# 旧机制（≤3.11）依赖 config.json 的 reasoning.variants + providerOptionsByLevel 查表，
-# 该查表函数在 3.14 内核里已不存在（只剩 zod schema 里的字段定义），
-# 因此**新版本不需要内核补丁**——此时继续报「锚点匹配异常」会误导用户。
-
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def detect_reasoning_mechanism(cjs: Path) -> str:
-    """判定内核的档位机制：'legacy'（≤3.11，需内核补丁）/ 'native'（≥3.14，配置侧下发）/ 'unknown'。
-
-    判据是「有没有 optionSpecs 这套配置侧机制」，而不是「有没有 defaultVariant 字符串」：
-    3.14+ 内核里 defaultVariant 仍作为 zod schema 的字段名存在（只剩定义、没有解析逻辑），
-    用 `defaultVariant not in data` 判定会把 ZCodium 1.0.2 这类内核误判成 unknown，
-    进而让 `--reasoning-config` 之外的路径以为「结构未知」。
-    """
-    try:
-        data = cjs.read_bytes()
-    except OSError:
-        return "unknown"
-    if any(data.count(a.encode()) == 1 for a in ANCHORS.values()):
-        return "legacy"
-    if b"optionSpecs" in data:
-        return "native"
-    return "unknown"
-
 
 def asar_version(asar: Path) -> str | None:
     """从 asar 内 package.json 读客户端版本（读不到返回 None）。"""
@@ -512,6 +289,53 @@ def _ensure_backup(backup: Path, current: Path, version: str | None, *,
     except OSError as e:
         print(f"    [!] 备份失败：{e}")
         return None
+    return data
+
+
+def _asar_header_index(asar: Path):
+    """解析 asar 头，返回 [(文件路径, 绝对偏移, 尺寸), ...]。"""
+    with open(asar, "rb") as f:
+        head = f.read(16)
+        header_size = struct.unpack("<I", head[4:8])[0]
+        json_len = struct.unpack("<I", head[12:16])[0]
+        f.seek(16)
+        header = json.loads(f.read(json_len).decode("utf-8"))
+
+    def walk(node, path):
+        for name, ent in (node.get("files") or {}).items():
+            p = f"{path}/{name}" if path else name
+            if "files" in ent:
+                yield from walk(ent, p)
+            else:
+                yield p, ent
+
+    data_start = 8 + header_size
+    return [(p, data_start + int(e["offset"]), e["size"])
+            for p, e in walk(header, "") if not e.get("unpacked")]
+
+
+def _asar_find_entry(header: dict, entry_path: str) -> dict | None:
+    node = header
+    for part in entry_path.split("/"):
+        files = node.get("files") or {}
+        if part not in files:
+            return None
+        node = files[part]
+    return node
+
+
+def _load_sidecar(side: Path, asar_size: int | None = None) -> list[dict]:
+    """读取补丁记录；兼容旧的单条格式。带 asar_size 指纹校验：
+    ZCode 升级会整个覆盖 app.asar，旧记录的 offset 不再可信，失配即作废。"""
+    if not side.is_file():
+        return []
+    data = json.loads(side.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and "patches" in data:
+        data = data["patches"]
+    elif isinstance(data, dict):
+        data = [data]
+    if asar_size is not None:
+        data = [r for r in data if r.get("asar_size") == asar_size]
     return data
 
 
@@ -738,110 +562,7 @@ def resolve_target(arg: str | None) -> list[Path]:
     raise SystemExit(f"[!] 指定路径下找不到 zcode.cjs：{arg}")
 
 
-# ---------------------------------------------------------------- 单个目标处理
 
-def process(target: Path, check_only: bool, revert: bool, *,
-            dry_run: bool = False, force: bool = False, version: str | None = None) -> bool:
-    """思维强度内核补丁（≤3.11 的 legacy 机制）。
-    全程按字节读写：不碰换行、不做编码转换，只改目标锚点那一段字节。
-    返回 True=成功/无需改动，False=失败（供 main 汇总退出码）。"""
-    backup = target.with_suffix(".cjs.bak")
-    try:
-        data = target.read_bytes()
-    except OSError as e:
-        print(f"[!] 无法读取 {target}：{e}")
-        return False
-
-    mechanism = detect_reasoning_mechanism(target)
-    patched_now = MARKER.encode() in data
-    meta = _load_backup_meta(backup)
-    state = "已打" if patched_now else ("已还原/未打" if backup.is_file() else "未打")
-    print(f"[*] {target}")
-    print(f"    {len(data):,} 字节 | 补丁: {state} | 备份: {'有' if backup.is_file() else '无'}"
-          + (f"（{meta.get('zcode_version')}）" if meta and meta.get("zcode_version") else ""))
-
-    if mechanism == "native":
-        print("    [i] 该内核使用 3.14+ 原生档位机制（optionSpecs），本补丁不适用：")
-        print("        档位参数由配置侧下发 —— 用 `--reasoning-config` 写入 provider_config.json"
-              "（先 `--reasoning-config --check` 看现状）")
-        return True
-
-    if revert:
-        if not backup.is_file():
-            print("    [.] 没有备份，跳过")
-            return True
-        bak = backup.read_bytes()
-        if not force:
-            if meta is None:
-                print("    [!] 备份无指纹（早期版本生成），无法确认与当前内核同版本；"
-                      "确认要还原请加 --force")
-                return False
-            if _sha256(data) not in (meta.get("sha256"), meta.get("patched_sha256")):
-                print("    [!] 当前内核与备份不是同一版本（客户端可能已升级）——"
-                      "还原会把旧版内核盖回新客户端，已拒绝")
-                print(f"        备份版本 {meta.get('zcode_version') or '未知'}；"
-                      f"确需强行还原加 --force，恢复出厂请用 scripts/restore_clean.py")
-                return False
-        if dry_run:
-            print(f"    [~] 将用备份还原 {len(bak):,} 字节")
-            return True
-        try:
-            target.write_bytes(bak)
-        except OSError as e:
-            print(f"    [!] 写入失败：{e}（请完全退出 ZCode / 用管理员身份运行）")
-            return False
-        print(f"    [+] 已从备份还原（{len(bak):,} 字节）")
-        return True
-
-    if check_only:
-        return True
-
-    if patched_now:
-        print("    [=] 已打过补丁，跳过")
-        return True
-
-    matched = [(ver, a) for ver, a in ANCHORS.items() if data.count(a.encode()) == 1]
-    if len(matched) != 1:
-        detail = ", ".join(f"{ver}={data.count(a.encode())}" for ver, a in ANCHORS.items())
-        print(f"    [!] 锚点匹配异常（{detail}，期望恰有一版=1）")
-        if mechanism == "unknown":
-            print("        内核结构与已知版本都不同：先 `--extract` 按结构特征提取锚点；"
-                  "若提取失败，多半是 3.14+ 新机制（不需要本补丁，改用 --reasoning-config）")
-        return False
-    ver, anchor = matched[0]
-    anchor_b = anchor.encode()
-    patched = data.replace(anchor_b, replacement_for(anchor).encode())
-    print(f"    [+] 匹配版本锚点: {ver}")
-
-    if dry_run:
-        print(f"    [~] 将插入兜底合成器并改写查表表达式（{len(data):,} → {len(patched):,} 字节）")
-        return True
-
-    cur = _ensure_backup(backup, target, version, patched=patched)
-    if cur is None:
-        return False
-    if cur != data:                       # 备份流程重读过文件，以最新字节为准
-        data = cur
-        patched = data.replace(anchor_b, replacement_for(anchor).encode())
-
-    try:
-        target.write_bytes(patched)
-    except OSError as e:
-        print(f"    [!] 写入失败：{e}（Program Files 需管理员；请完全退出 ZCode）")
-        return False
-
-    back = target.read_bytes()            # 回读校验：长度符合预期且原始锚点已消失
-    ok = len(back) == len(patched) and MARKER.encode() in back and anchor_b not in back
-    print(f"    [{'+' if ok else '!'}] 补丁{'写入成功' if ok else '写入校验失败'}"
-          f"（{len(back):,} 字节，备份 {backup.name}）")
-    if not ok:
-        print("        [!] 请用 `--revert` 还原后重试，或先 --dry-run 观察")
-    return ok
-
-
-# ------------------------------------------------------- 用量页去截断补丁（asar 内同长度原地改字节）
-
-# 每项：key=定位用的文件名特征，pattern=截断表达式原文，replacement=等价短替换（空格补齐）
 USAGE_PATCHES = [
     {
         "key": "AppUsageDailyModelTrendChart",
@@ -861,8 +582,6 @@ USAGE_PATCHES = [
     },
 ]
 
-# 模型选择弹窗加宽（同样长度原地覆盖；key=None 表示按内容特征定位文件，
-# 不依赖 assets 文件名里的内容哈希，跨版本稳定）
 WIDTH_PATCHES = [
     {
         "key": None,
@@ -882,385 +601,6 @@ WIDTH_PATCHES = [
         "optional": False,
     },
 ]
-
-
-def _asar_header_index(asar: Path):
-    """解析 asar 头，返回 [(文件路径, 绝对偏移, 尺寸), ...]。"""
-    with open(asar, "rb") as f:
-        head = f.read(16)
-        header_size = struct.unpack("<I", head[4:8])[0]
-        json_len = struct.unpack("<I", head[12:16])[0]
-        f.seek(16)
-        header = json.loads(f.read(json_len).decode("utf-8"))
-
-    def walk(node, path):
-        for name, ent in (node.get("files") or {}).items():
-            p = f"{path}/{name}" if path else name
-            if "files" in ent:
-                yield from walk(ent, p)
-            else:
-                yield p, ent
-
-    data_start = 8 + header_size
-    return [(p, data_start + int(e["offset"]), e["size"])
-            for p, e in walk(header, "") if not e.get("unpacked")]
-
-
-def _load_sidecar(side: Path, asar_size: int | None = None) -> list[dict]:
-    """读取补丁记录；兼容旧的单条格式。带 asar_size 指纹校验：
-    ZCode 升级会整个覆盖 app.asar，旧记录的 offset 不再可信，失配即作废。"""
-    if not side.is_file():
-        return []
-    data = json.loads(side.read_text(encoding="utf-8"))
-    if isinstance(data, dict) and "patches" in data:
-        data = data["patches"]
-    elif isinstance(data, dict):
-        data = [data]
-    if asar_size is not None:
-        data = [r for r in data if r.get("asar_size") == asar_size]
-    return data
-
-
-def _asar_find_entry(header: dict, entry_path: str) -> dict | None:
-    node = header
-    for part in entry_path.split("/"):
-        files = node.get("files") or {}
-        if part not in files:
-            return None
-        node = files[part]
-    return node
-
-
-# ---------------------------------------------------------------- 品牌名替换 / 窗口 ID 修复
-# 这两项的共同点：都是「按上下文定位一段字节 → 替换成另一段」，长度可能变化。
-# 因此不能走用量图那种同长度原地覆盖，必须整包重打包（_repack_asar 会重排 offset、
-# 重算 integrity、流式搬运未改动条目）。判据与还原记录沿用 sidecar 机制。
-
-def _walk_script_entries(header: dict):
-    """产出 (路径, entry) 且只含脚本类文件（名字补丁只在脚本里找）。"""
-    for path, ent in _asar_walk_entries(header):
-        if Path(path).suffix.lower() in SCRIPT_EXTS:
-            yield path, ent
-
-
-def _find_display_name_spans(raw: bytes, data_start: int, header: dict):
-    """定位「显示名兜底字面量」，返回 [(路径, 文件内偏移, 长度, 字面量), ...]。
-
-    多级兜底（压缩器可能重排 / 拆分表达式）：
-      1. displayName … username … `字面量`     （主特征）
-      2. username … displayName … `字面量`     （反向顺序）
-      3. 已知品牌字面量出现在 displayName/username 附近
-      4. 全包唯一的品牌字面量（标签被移到独立 i18n 文件时）
-    头像首字母兜底（`Z`)[0]?.toUpperCase()）必须排除，否则会把头像字母改掉。
-    """
-    ents = {}
-    for path, ent in _walk_script_entries(header):
-        ents[path] = (data_start + int(ent["offset"]), int(ent["size"]))
-
-    def _scan(pattern, allow_initial=False):
-        hits = []
-        for path, (off, size) in ents.items():
-            blob = raw[off:off + size]
-            for m in pattern.finditer(blob):
-                lit_start, lit_end = m.start(2), m.end(2)
-                if not allow_initial and RE_NAME_INITIAL_TAIL.match(blob, m.end()):
-                    continue          # 头像首字母，不是显示名
-                hits.append((path, lit_start, lit_end - lit_start, bytes(m.group(2))))
-        return hits
-
-    for pattern in (RE_NAME_PRIMARY, RE_NAME_PRIMARY_REV):
-        hits = _scan(pattern)
-        if hits:
-            return hits
-
-    # 3) 表达式被拆开/换了变量名：在 displayName/username 附近找品牌字面量
-    brand_alt = b"|".join(re.escape(b.encode("utf-8")) for b in DEFAULT_BRANDS)
-    near = re.compile(
-        rb"(?:displayName|username)[\s\S]{0,320}?"
-        rb"(?:\|\||\?\?)\s*([`\"'])(" + brand_alt + rb")\1"
-    )
-    hits = _scan(near, allow_initial=True)
-    if hits:
-        return hits
-
-    # 4) 最后手段：全包中唯一的品牌字面量
-    brand_pat = re.compile(
-        rb"([`\"'])(" + brand_alt + rb")\1"
-    )
-    hits = _scan(brand_pat, allow_initial=True)
-    literals = {h[3] for h in hits}
-    if len(literals) == 1:
-        return hits
-    return []
-
-
-def _describe_current_literal(spans) -> str:
-    """把当前命中的字面量汇总成一句可读文本（用于 --check 报告）。
-
-    用户经常问「现在界面到底是什么名字」——只报「已是目标内容 / 待写入」
-    答不了这个问题，而直接读 asar 又太麻烦。这里把命中的原文一并给出。
-    """
-    try:
-        vals = sorted({lit.decode("utf-8", "replace") for _p, _o, _l, lit in spans})
-    except Exception:
-        return ""
-    if not vals:
-        return ""
-    if len(vals) == 1:
-        return vals[0]
-    return "、".join(vals[:5]) + ("…" if len(vals) > 5 else "")
-
-
-def _apply_span_replacements(blob: bytes, spans) -> bytes:
-    """按偏移倒序替换（倒序保证前面的偏移不被后面的长度变化影响）。"""
-    out = bytearray(blob)
-    for start, length, new in sorted(spans, key=lambda s: s[0], reverse=True):
-        out[start:start + length] = new
-    return bytes(out)
-
-
-def _process_asar_text_patch(asar: Path, check_only: bool, revert: bool, *,
-                             label: str, side_suffix: str,
-                             find_spans, make_replacement,
-                             absent_ok: bool = False,
-                             dry_run: bool = False) -> bool:
-    """「按上下文定位 → 替换文本」的通用链路（品牌名 / 窗口 ID 修复共用）。
-
-    find_spans(raw, data_start, header) -> [(路径, 偏移, 长度, 原字面量), ...]
-    make_replacement(原字面量) -> bytes      （新内容；长度可不同）
-    absent_ok=True 表示「一个都没找到 = 目标状态已达成」而不是失败
-    （缺陷修复类：上游自己修掉之后，这里就不该再报错）。
-
-    写入走 _repack_asar：它会重排 offset、重算 integrity、原子替换，
-    这样长度变化也不会破坏 asar 结构（用量图那种同长度覆盖不适用）。
-    原始条目字节记进 sidecar，便于精确还原。
-    """
-    side = asar.with_name(asar.name + side_suffix)
-
-    try:
-        asar_size = asar.stat().st_size
-        raw, header, data_start = _asar_header_raw(asar)
-    except (OSError, ValueError) as e:
-        print(f"[!] {asar}\n    无法读取：{e}")
-        return False
-
-    if revert:
-        # ★ 这里**不能**按 asar_size 过滤 sidecar：本补丁会让条目长度变化，
-        #   重打包后 asar 总大小必然与打补丁前不同。用大小做指纹会把记录全部作废，
-        #   表现为「有备份却还原不了」。改按路径 + 当前 header 是否仍有该条目来判断。
-        saved = _load_sidecar(side)
-        live_paths = {p for p, _ in _asar_walk_entries(header)}
-        saved = [r for r in saved if r.get("path") in live_paths]
-        if not saved:
-            cur = _describe_current_literal(_find_display_name_spans(raw, data_start, header)) \
-                if side_suffix == ".name-patch.json" else ""
-            print(f"[.] {asar}\n    {label}: 没有可用的 sidecar 备份，跳过"
-                  + (f"（当前值：{cur}，即客户端原样）" if cur else ""))
-            return True
-        if dry_run:
-            print(f"[~] {asar}\n    {label}: 将还原 {len(saved)} 个文件")
-            return True
-        if check_only:
-            # --check 是只读的：这里必须拦住，否则「体检」会真的改写 asar
-            cur = _describe_current_literal(_find_display_name_spans(raw, data_start, header)) \
-                if side_suffix == ".name-patch.json" else ""
-            print(f"    [ ] {_short(asar)} | {label}: 待还原 {len(saved)} 个文件"
-                  + (f"（当前值：{cur}）" if cur else ""))
-            return True
-        overwrite = {r["path"]: base64.b64decode(r["original_b64"]) for r in saved}
-        _repack_asar(asar, overwrite, set())
-        side.unlink(missing_ok=True)
-        print(f"[+] {asar}\n    {label}: 已还原 {len(overwrite)} 个文件")
-        return True
-
-    spans = find_spans(raw, data_start, header)
-    if not spans:
-        if absent_ok:
-            print(f"    [=] {_short(asar)} | {label}: 目标不存在（已修复/无需处理）")
-            return True
-        print(f"    [!] {asar}\n    {label}: 未定位到目标（结构可能已变），拒绝盲改")
-        return False
-
-    by_path: dict[str, list] = {}
-    for path, off, length, lit in spans:
-        ent = _asar_find_entry(header, path)
-        if ent is None:
-            continue
-        by_path.setdefault(path, []).append((off, length, make_replacement(lit)))
-
-    overwrite: dict[str, bytes] = {}
-    for path, repls in by_path.items():
-        ent = _asar_find_entry(header, path)
-        blob = _asar_entry_bytes(raw, data_start, ent)
-        new_blob = _apply_span_replacements(blob, repls)
-        if new_blob != blob:
-            overwrite[path] = new_blob
-
-    # 已经全部是目标内容 → 幂等跳过（但补 sidecar，保证还能还原）
-    if not overwrite:
-        cur = _describe_current_literal(spans)
-        print(f"    [=] {_short(asar)} | {label}: 已是目标内容，跳过"
-              + (f"（当前值：{cur}）" if cur else ""))
-        return True
-
-    if check_only:
-        cur = _describe_current_literal(spans)
-        for path in overwrite:
-            print(f"    [ ] {_short(path)} | {label}: 待写入"
-                  + (f"（当前值：{cur}）" if cur else ""))
-        return True
-
-    if dry_run:
-        print(f"[~] {asar}\n    {label}: 将重打包 {len(overwrite)} 个文件")
-        return True
-
-    # sidecar 记录「改之前的原始字节」，只在首次创建（保留最早的干净副本）
-    if not side.is_file():
-        records = []
-        for path in overwrite:
-            ent = _asar_find_entry(header, path)
-            records.append({
-                "path": path,
-                "asar_size": asar_size,
-                "original_b64": base64.b64encode(
-                    _asar_entry_bytes(raw, data_start, ent)).decode("ascii"),
-            })
-        side.write_text(json.dumps({"patches": records}, ensure_ascii=False),
-                        encoding="utf-8")
-
-    _repack_asar(asar, overwrite, set())
-    print(f"[+] {asar}\n    {label}: 已写入 {len(overwrite)} 个文件（备份 {side.name}）")
-    return True
-
-
-def _short(p: str | Path) -> str:
-    return str(p).replace("\\", "/").split("/")[-1]
-
-
-def process_display_name(asar: Path, check_only: bool, revert: bool, *,
-                         name: str | None = None,
-                         dry_run: bool = False) -> bool:
-    """把渲染层的显示名兜底字面量换成 name。
-
-    **name=None 等价于「强制写回 ZCodium」**：
-    用户跑 `/zcode-patch-setdisplayname` 不带参数时，期望就是看到 `ZCodium`，
-    而不是「恢复 asar 里原本的字面量」——后者由发行版决定，本机 ZCodium 1.0.2
-    实际是 `Bludoge`，还原出来仍不是用户要的 ZCodium。
-
-    `revert=True` 仍走 sidecar 还原（回到打补丁前的字节），
-    这是给「精确撤销」用的，与无参语义不同。
-    """
-    if name is None and not revert:
-        # 无参 = 强制写回 ZCodium（不依赖 sidecar / 发行版原值）
-        name = DEFAULT_DISPLAY_TARGET
-
-    if name is None:
-        # 仅 revert 路径会到这里：从 sidecar 还原原始字节。
-        # ⚠️ 必须把 check_only/dry_run 原样传下去：否则 `--check` 会真的去写盘。
-        return _process_asar_text_patch(
-            asar, check_only, True,
-            label="品牌名替换（还原）",
-            side_suffix=".name-patch.json",
-            find_spans=lambda raw, ds, h: _find_display_name_spans(raw, ds, h),
-            make_replacement=lambda _old: b"",       # 还原分支不会用到
-            dry_run=dry_run)
-
-    def find(raw, data_start, header):
-        return _find_display_name_spans(raw, data_start, header)
-
-    def repl(_old: bytes) -> bytes:
-        return name.encode("utf-8")
-
-    return _process_asar_text_patch(
-        asar, check_only, revert,
-        # 还原时不要显示「→ 名字」：那个名字对还原没有意义（原文来自 sidecar）
-        label=("品牌名替换（还原）" if revert
-               else f"品牌名替换 → {name}"),
-        side_suffix=".name-patch.json",
-        find_spans=find, make_replacement=repl, dry_run=dry_run)
-
-
-def process_window_id_fix(asar: Path, check_only: bool, revert: bool, *,
-                          dry_run: bool = False) -> bool:
-    """修 ZCodium 1.0.2 的 disposeWindow(browserWindowId) 未定义变量缺陷。
-
-    同作用域内 n = e.webContents.id，是 disposeWindow 期望的窗口 id；
-    旁边的 disposeRemoteWorkspaceSessionsForWindow(n, ...) 用法一致。
-    """
-    def find(raw, data_start, header):
-        hits = []
-        for path, ent in _walk_script_entries(header):
-            off = data_start + int(ent["offset"])
-            blob = raw[off:off + int(ent["size"])]
-            for m in RE_WINDOW_ID_BUG.finditer(blob):
-                hits.append((path, m.start(), m.end() - m.start(),
-                             bytes(m.group(0))))
-        return hits
-
-    def repl(_old: bytes) -> bytes:
-        return b".disposeWindow(n)"
-
-    return _process_asar_text_patch(
-        asar, check_only, revert,
-        label="窗口 ID 缺陷修复",
-        side_suffix=".winid-patch.json",
-        find_spans=find, make_replacement=repl,
-        absent_ok=True, dry_run=dry_run)
-
-
-
-def _asar_sync_integrity(asar: Path, entry_path: str, new_bytes: bytes, *,
-                         dry_run: bool = False) -> None:
-    """同长度原地交换 asar 头里该条目的 integrity 记录，使记录与内容一致。
-    sha256 hex 定长（64），头部长度与全部 offset 零改动，保持零重打包特性。
-    实现要点：**只替换「该条目自己的 integrity 对象」那一段文本**——早期版本按哈希字符串
-    全局查找替换，当同一哈希串在头部出现两次（≤4MB 文件的整文件哈希 == 唯一块哈希，或
-    另一个内容完全相同的条目）时会误改到别的条目，此处改为整对象唯一定位。"""
-    with open(asar, "rb") as f:
-        head = f.read(16)
-        json_len = struct.unpack("<I", head[12:16])[0]
-        f.seek(16)
-        hdr = f.read(json_len)
-    ent = _asar_find_entry(json.loads(hdr.decode("utf-8")), entry_path)
-    itg = (ent or {}).get("integrity")
-    if not itg:
-        return
-    new_itg = _asar_integrity(new_bytes)
-    if itg == new_itg:
-        return
-    if len(itg.get("blocks") or []) != len(new_itg["blocks"]):
-        print(f"    [!] {entry_path} 的分块数变化，跳过 integrity 同步")
-        return
-    old_text = json.dumps(itg, separators=(",", ":")).encode()
-    new_text = json.dumps(new_itg, separators=(",", ":")).encode()
-    if len(old_text) != len(new_text):
-        print(f"    [!] {entry_path} 的 integrity 段长度变化，跳过同步")
-        return
-
-    # 定位方式①（首选）：用条目自己的 size/offset 前缀锚定，再核对紧随其后的对象文本。
-    # offset 唯一，因此这对锚点在整个头部里唯一，同内容条目也不会互相误伤。
-    pos = -1
-    try:
-        prefix = f'"size":{int(ent["size"])},"offset":"{ent["offset"]}","integrity":'.encode()
-        if hdr.count(prefix) == 1:
-            start = hdr.find(prefix) + len(prefix)
-            if hdr[start:start + len(old_text)] == old_text:
-                pos = start
-    except (KeyError, TypeError, ValueError):
-        pass
-    # 定位方式②（兜底）：整段对象文本在头部唯一
-    if pos < 0 and hdr.count(old_text) == 1:
-        pos = hdr.find(old_text)
-    if pos < 0:
-        print(f"    [!] {entry_path} 的 integrity 段无法唯一定位，跳过同步（内容已改、记录未同步）")
-        return
-    if dry_run:
-        print(f"    [~] 将同步 {entry_path} 的 integrity 记录")
-        return
-    with open(asar, "r+b") as f:
-        f.seek(16 + pos)
-        f.write(new_text)
-
 
 def process_usage_chart(asar: Path, check_only: bool, revert: bool, *,
                         dry_run: bool = False) -> bool:
@@ -3093,289 +2433,306 @@ def process_enhance_prompt(asar: Path, check_only: bool, revert: bool, enhance_s
                               dry_run=dry_run, version=version)
 
 
-# ==================== 3.14+ 原生档位配置（provider_config.json，无需内核补丁） ====================
-# 3.14 起内核不再读 config.json 的 reasoning.variants / defaultVariant（内核里已无这两个符号，
-# providerOptionsByLevel 只剩 schema 定义），档位改为「配置侧原生」：
-#
-#   provider_config.json
-#     └ config.modelConfigRules.providerModelRules[]
-#         { modelId, providerId,
-#           config: { properties: {contextWindow},
-#                     optionSpecs: { reasoningLevel: { values:[...], map:"<CEL>" } } } }
-#
-#   * values → 界面档位列表（**末位即默认档**），内核 listThoughtLevels / y$o 从这里取
-#   * map    → CEL 表达式，请求发出前由 createModelOptionMapFetch 合并进请求体 JSON
-#   * 与 manualProviderModelRules 冲突（同 providerId+modelId 不能同时在两个列表，否则内核
-#     schema 校验失败、整个供应商配置降级为空）——本命令遇到冲突只报告不写入。
-#
-# map 直接采用「ZCode 自己会写的写法」（内置规则 / 界面手动配置生成的一致形态），
-# 保证 CEL 一定能编译通过、行为与官方路径一致。
+# ---------------------------------------------------------------- 品牌名替换 / 窗口 ID 修复
+# 这两项的共同点：都是「按上下文定位一段字节 → 替换成另一段」，长度可能变化。
+# 因此不能走用量图那种同长度原地覆盖，必须整包重打包（_repack_asar 会重排 offset、
+# 重算 integrity、流式搬运未改动条目）。判据与还原记录沿用 sidecar 机制。
 
-REASONING_MAP_OPENAI = """{
-  "thinking": {
-    "type": reasoningLevel == "disabled" || reasoningLevel == "none" ? "disabled" : "enabled"
-  },
-  "enable_thinking": reasoningLevel != "disabled" && reasoningLevel != "none",
-  "reasoning_effort": reasoningLevel == "disabled" ? "none" : reasoningLevel == "enabled" ? "high" : reasoningLevel
-}"""
-REASONING_MAP_ANTHROPIC = (
-    'reasoningLevel == "disabled" || reasoningLevel == "none" || reasoningLevel == "off"\n'
-    '  ? {"thinking":{"type":"disabled"}}\n'
-    '  : {"thinking":{"type":"adaptive"},"output_config":{"effort": reasoningLevel == "enabled" ? "high" : reasoningLevel}}'
-)
+def _walk_script_entries(header: dict):
+    """产出 (路径, entry) 且只含脚本类文件（名字补丁只在脚本里找）。"""
+    for path, ent in _asar_walk_entries(header):
+        if Path(path).suffix.lower() in SCRIPT_EXTS:
+            yield path, ent
 
 
-def _v2_root(override: str | None = None) -> Path:
-    """配置根目录 <dataBaseDir>/<数据目录名>/v2。
+def _find_display_name_spans(raw: bytes, data_start: int, header: dict):
+    """定位「显示名兜底字面量」，返回 [(路径, 文件内偏移, 长度, 字面量), ...]。
 
-    数据目录名随发行版而异：原版 ZCode 用 ~/.zcode，ZCodium 用 ~/.zcodium。
-    这里**按实际存在的那个**解析（两个都在时优先 .zcode，保持原版行为不变），
-    dataBaseDir 同样取自该目录下的 setting.json（与客户端 bootstrap 同逻辑）。
+    多级兜底（压缩器可能重排 / 拆分表达式）：
+      1. displayName … username … `字面量`     （主特征）
+      2. username … displayName … `字面量`     （反向顺序）
+      3. 已知品牌字面量出现在 displayName/username 附近
+      4. 全包唯一的品牌字面量（标签被移到独立 i18n 文件时）
+    头像首字母兜底（`Z`)[0]?.toUpperCase()）必须排除，否则会把头像字母改掉。
     """
-    if override:
-        return Path(override)
-    base = Path.home()
-    for name in data_dir_names():
-        cand = base / name / "v2"
-        sfile = cand / "setting.json"
-        try:
-            s = json.loads(sfile.read_text(encoding="utf-8"))
-            dbd = s.get("dataBaseDir")
-            if isinstance(dbd, str) and dbd.strip():
-                alt = Path(dbd.strip()) / name / "v2"
-                if alt.is_dir():
-                    return alt
-                return cand
-        except Exception:
-            pass
-        if cand.is_dir():
-            return cand
-    return base / data_dir_names()[0] / "v2"
+    ents = {}
+    for path, ent in _walk_script_entries(header):
+        ents[path] = (data_start + int(ent["offset"]), int(ent["size"]))
+
+    def _scan(pattern, allow_initial=False):
+        hits = []
+        for path, (off, size) in ents.items():
+            blob = raw[off:off + size]
+            for m in pattern.finditer(blob):
+                lit_start, lit_end = m.start(2), m.end(2)
+                if not allow_initial and RE_NAME_INITIAL_TAIL.match(blob, m.end()):
+                    continue          # 头像首字母，不是显示名
+                hits.append((path, lit_start, lit_end - lit_start, bytes(m.group(2))))
+        return hits
+
+    for pattern in (RE_NAME_PRIMARY, RE_NAME_PRIMARY_REV):
+        hits = _scan(pattern)
+        if hits:
+            return hits
+
+    # 3) 表达式被拆开/换了变量名：在 displayName/username 附近找品牌字面量
+    brand_alt = b"|".join(re.escape(b.encode("utf-8")) for b in DEFAULT_BRANDS)
+    near = re.compile(
+        rb"(?:displayName|username)[\s\S]{0,320}?"
+        rb"(?:\|\||\?\?)\s*([`\"'])(" + brand_alt + rb")\1"
+    )
+    hits = _scan(near, allow_initial=True)
+    if hits:
+        return hits
+
+    # 4) 最后手段：全包中唯一的品牌字面量
+    brand_pat = re.compile(
+        rb"([`\"'])(" + brand_alt + rb")\1"
+    )
+    hits = _scan(brand_pat, allow_initial=True)
+    literals = {h[3] for h in hits}
+    if len(literals) == 1:
+        return hits
+    return []
 
 
-def _is_zcodium_root(v2_root: Path) -> bool:
-    """该配置根是否属于 ZCodium 发行版（数据目录名为 .zcodium）。
+def _describe_current_literal(spans) -> str:
+    """把当前命中的字面量汇总成一句可读文本（用于 --check 报告）。
 
-    ZCodium 1.0.2 起不再生成 config.json，档位只走 provider_config.json，
-    因此「缺 config.json」在那里是正常状态，不是数据根指错。
+    用户经常问「现在界面到底是什么名字」——只报「已是目标内容 / 待写入」
+    答不了这个问题，而直接读 asar 又太麻烦。这里把命中的原文一并给出。
     """
-    parts = {p.lower() for p in v2_root.parts}
-    return ".zcodium" in parts
-
-
-def _desired_levels(entry: dict) -> tuple[list[str], str] | None:
-    """从 config.json 的模型条目推导档位列表，返回 (levels, 来源)。"""
-    specs = entry.get("optionSpecs")
-    if isinstance(specs, dict):
-        rl = specs.get("reasoningLevel")
-        if isinstance(rl, dict) and isinstance(rl.get("values"), list):
-            vals = [str(v).strip() for v in rl["values"] if str(v).strip()]
-            if vals:
-                return vals, "config.optionSpecs"
-    r = entry.get("reasoning")
-    if isinstance(r, dict):
-        vals = [str(v).strip() for v in (r.get("variants") or []) if str(v).strip()]
-        if vals:
-            d = r.get("defaultVariant")
-            if isinstance(d, str) and d.strip() in vals:
-                vals = [v for v in vals if v != d.strip()] + [d.strip()]   # 末位即默认档
-            return vals, "config.reasoning.variants"
-    return None
-
-
-def process_reasoning_config(v2_root: Path, check_only: bool, revert: bool, *,
-                             dry_run: bool = False) -> bool:
-    """把 config.json 的档位同步进 provider_config.json（3.14+ 原生机制）。
-    返回 True=成功/无需改动，False=失败。"""
-    cfg_path = v2_root / "config.json"
-    pc_path = v2_root / "provider_config.json"
-    bak = pc_path.with_name(pc_path.name + ".reasoning-bak")
-
-    if not cfg_path.is_file():
-        # ZCodium 发行版（数据根在 ~/.zcodium）已不再生成 config.json：档位全部由
-        # provider_config.json 的 optionSpecs 承载，没有需要迁移的旧配置。
-        # 这不是故障，按「无需改动」处理；原版 ZCode 缺 config.json 仍必须报错，
-        # 那通常意味着数据根指错了（--v2-root / dataBaseDir 配错）。
-        if _is_zcodium_root(v2_root):
-            print(f"[.] {v2_root}\n    ZCodium 发行版不生成 config.json，"
-                  f"档位直接由 provider_config.json 承载，无需迁移")
-            return True
-        print(f"[!] 找不到配置文件 {cfg_path}")
-        return False
     try:
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        print(f"[!] 解析 config.json 失败：{e}")
+        vals = sorted({lit.decode("utf-8", "replace") for _p, _o, _l, lit in spans})
+    except Exception:
+        return ""
+    if not vals:
+        return ""
+    if len(vals) == 1:
+        return vals[0]
+    return "、".join(vals[:5]) + ("…" if len(vals) > 5 else "")
+
+
+def _apply_span_replacements(blob: bytes, spans) -> bytes:
+    """按偏移倒序替换（倒序保证前面的偏移不被后面的长度变化影响）。"""
+    out = bytearray(blob)
+    for start, length, new in sorted(spans, key=lambda s: s[0], reverse=True):
+        out[start:start + length] = new
+    return bytes(out)
+
+
+def _process_asar_text_patch(asar: Path, check_only: bool, revert: bool, *,
+                             label: str, side_suffix: str,
+                             find_spans, make_replacement,
+                             absent_ok: bool = False,
+                             dry_run: bool = False) -> bool:
+    """「按上下文定位 → 替换文本」的通用链路（品牌名 / 窗口 ID 修复共用）。
+
+    find_spans(raw, data_start, header) -> [(路径, 偏移, 长度, 原字面量), ...]
+    make_replacement(原字面量) -> bytes      （新内容；长度可不同）
+    absent_ok=True 表示「一个都没找到 = 目标状态已达成」而不是失败
+    （缺陷修复类：上游自己修掉之后，这里就不该再报错）。
+
+    写入走 _repack_asar：它会重排 offset、重算 integrity、原子替换，
+    这样长度变化也不会破坏 asar 结构（用量图那种同长度覆盖不适用）。
+    原始条目字节记进 sidecar，便于精确还原。
+    """
+    side = asar.with_name(asar.name + side_suffix)
+
+    try:
+        asar_size = asar.stat().st_size
+        raw, header, data_start = _asar_header_raw(asar)
+    except (OSError, ValueError) as e:
+        print(f"[!] {asar}\n    无法读取：{e}")
         return False
 
     if revert:
-        if not bak.is_file():
-            print(f"[.] {v2_root}\n    没有档位配置备份（{bak.name}），跳过")
+        # ★ 这里**不能**按 asar_size 过滤 sidecar：本补丁会让条目长度变化，
+        #   重打包后 asar 总大小必然与打补丁前不同。用大小做指纹会把记录全部作废，
+        #   表现为「有备份却还原不了」。改按路径 + 当前 header 是否仍有该条目来判断。
+        saved = _load_sidecar(side)
+        live_paths = {p for p, _ in _asar_walk_entries(header)}
+        saved = [r for r in saved if r.get("path") in live_paths]
+        if not saved:
+            cur = _describe_current_literal(_find_display_name_spans(raw, data_start, header)) \
+                if side_suffix == ".name-patch.json" else ""
+            print(f"[.] {asar}\n    {label}: 没有可用的 sidecar 备份，跳过"
+                  + (f"（当前值：{cur}，即客户端原样）" if cur else ""))
             return True
         if dry_run:
-            print(f"[~] 将用 {bak.name} 还原 provider_config.json")
+            print(f"[~] {asar}\n    {label}: 将还原 {len(saved)} 个文件")
             return True
-        try:
-            shutil.copyfile(bak, pc_path)
-        except OSError as e:
-            print(f"[!] 还原失败：{e}（请先完全退出 ZCode）")
-            return False
-        bak.unlink(missing_ok=True)
-        print(f"[+] {v2_root}\n    已还原 provider_config.json 并删除备份")
+        if check_only:
+            # --check 是只读的：这里必须拦住，否则「体检」会真的改写 asar
+            cur = _describe_current_literal(_find_display_name_spans(raw, data_start, header)) \
+                if side_suffix == ".name-patch.json" else ""
+            print(f"    [ ] {_short(asar)} | {label}: 待还原 {len(saved)} 个文件"
+                  + (f"（当前值：{cur}）" if cur else ""))
+            return True
+        overwrite = {r["path"]: base64.b64decode(r["original_b64"]) for r in saved}
+        _repack_asar(asar, overwrite, set())
+        side.unlink(missing_ok=True)
+        print(f"[+] {asar}\n    {label}: 已还原 {len(overwrite)} 个文件")
         return True
 
-    try:
-        pc = json.loads(pc_path.read_text(encoding="utf-8")) if pc_path.is_file() else {}
-    except Exception as e:
-        print(f"[!] 解析 provider_config.json 失败：{e}")
+    spans = find_spans(raw, data_start, header)
+    if not spans:
+        if absent_ok:
+            print(f"    [=] {_short(asar)} | {label}: 目标不存在（已修复/无需处理）")
+            return True
+        print(f"    [!] {asar}\n    {label}: 未定位到目标（结构可能已变），拒绝盲改")
         return False
-    if not isinstance(pc, dict):
-        pc = {}
-    pc.setdefault("schemaVersion", 1)
-    conf = pc.setdefault("config", {})
-    mcr = conf.setdefault("modelConfigRules", {})
-    rules = mcr.setdefault("providerModelRules", [])
-    if not isinstance(rules, list):
-        rules = mcr["providerModelRules"] = []
-    manual = {f"{m.get('providerId')}/{m.get('modelId')}"
-              for m in (mcr.get("manualProviderModelRules") or []) if isinstance(m, dict)}
 
-    print(f"[*] {pc_path}")
-    print(f"    配置根目录: {v2_root}")
-
-    by_key = {(r.get("providerId"), r.get("modelId")): r for r in rules if isinstance(r, dict)}
-    # 预先存在的重复声明：同一模型同时出现在智能规则与手动规则里 → 内核 schema 校验失败、
-    # 整份供应商配置降级为空（界面表现为「模型全没了」）。这里只报告，不擅自删改。
-    dup = [f"{r.get('providerId')}/{r.get('modelId')}" for r in rules
-           if isinstance(r, dict) and f"{r.get('providerId')}/{r.get('modelId')}" in manual]
-    if dup:
-        print(f"    [!] 发现 {len(dup)} 个模型同时存在于 providerModelRules 与 "
-              f"manualProviderModelRules —— 内核会因此把整份供应商配置降级为空，"
-              f"建议在界面重新保存该供应商或手工清理：{', '.join(dup[:4])}")
-    planned, unchanged, no_levels, conflicts, builtin_skipped = [], [], [], [], 0
-
-    for pid, pdata in (cfg.get("provider") or {}).items():
-        if not isinstance(pdata, dict):
+    by_path: dict[str, list] = {}
+    for path, off, length, lit in spans:
+        ent = _asar_find_entry(header, path)
+        if ent is None:
             continue
-        if str(pid).startswith("builtin:"):
-            builtin_skipped += 1          # 内置模板供应商：档位由内核内置规则提供，不介入
-            continue
-        kind = pdata.get("kind")
-        for mid, entry in (pdata.get("models") or {}).items():
-            if not isinstance(entry, dict):
-                continue
-            want = _desired_levels(entry)
-            if not want:
-                no_levels.append(f"{pid}/{mid}")
-                continue
-            levels, src = want
-            if f"{pid}/{mid}" in manual:
-                conflicts.append(f"{pid}/{mid}")
-                continue
-            map_expr = REASONING_MAP_ANTHROPIC if kind == "anthropic" else REASONING_MAP_OPENAI
-            ctx = ((entry.get("limit") or {}).get("context")) or 1000000
-            max_tok = (
-                ((entry.get("limit") or {}).get("maxTokens")) or
-                ((entry.get("limit") or {}).get("output")) or
-                (((entry.get("optionSpecs") or {}).get("maxOutputTokens") or {}).get("max"))
-            )
-            try:
-                max_tok = int(max_tok) if max_tok and int(max_tok) > 0 else None
-            except (ValueError, TypeError):
-                max_tok = None
+        by_path.setdefault(path, []).append((off, length, make_replacement(lit)))
 
-            rule = by_key.get((pid, mid))
-            specs_existing = ((rule.get("config") or {}).get("optionSpecs") or {}) if rule else {}
-            rl = specs_existing.get("reasoningLevel")
-            rl_match = isinstance(rl, dict) and rl.get("values") == levels and rl.get("map") == map_expr
-            mot = specs_existing.get("maxOutputTokens")
-            mot_match = True
-            if max_tok is not None:
-                mot_match = isinstance(mot, dict) and mot.get("max") == max_tok
+    overwrite: dict[str, bytes] = {}
+    for path, repls in by_path.items():
+        ent = _asar_find_entry(header, path)
+        blob = _asar_entry_bytes(raw, data_start, ent)
+        new_blob = _apply_span_replacements(blob, repls)
+        if new_blob != blob:
+            overwrite[path] = new_blob
 
-            if rl_match and mot_match:
-                unchanged.append(f"{pid}/{mid}")
-                continue
-
-            planned.append({"pid": pid, "mid": mid, "kind": kind, "levels": levels,
-                            "map": map_expr, "src": src, "ctx": int(ctx), "max_tok": max_tok,
-                            "existed": bool(rule)})
-
-    for it in planned:
-        print(f"    {'[ ]' if check_only else '[~]'} {it['pid']}/{it['mid']}"
-              f"  →  {len(it['levels'])} 档 {'/'.join(it['levels'])}"
-              f"  （{'更新已有规则' if it['existed'] else '新建规则'}，来源 {it['src']}）")
-    if unchanged:
-        print(f"    已是最新 {len(unchanged)} 个：{', '.join(unchanged[:6])}"
-              + (" …" if len(unchanged) > 6 else ""))
-    if no_levels:
-        print(f"    未配档位 {len(no_levels)} 个（跳过）：{', '.join(no_levels[:6])}"
-              + (" …" if len(no_levels) > 6 else ""))
-    if conflicts:
-        print(f"    [·] {len(conflicts)} 个模型已在界面「手动配置」过（manualProviderModelRules，"
-              f"本身已带 optionSpecs、已生效）；内核禁止同一模型同时出现在两个规则列表，故不迁移："
-              f"{', '.join(conflicts[:4])}")
-    if builtin_skipped:
-        print(f"    内置供应商 {builtin_skipped} 个未处理（档位由内核内置规则提供）")
-
-    if not planned:
-        print(f"[=] {pc_path}\n    档位配置已是最新，无需写入")
+    # 已经全部是目标内容 → 幂等跳过（但补 sidecar，保证还能还原）
+    if not overwrite:
+        cur = _describe_current_literal(spans)
+        print(f"    [=] {_short(asar)} | {label}: 已是目标内容，跳过"
+              + (f"（当前值：{cur}）" if cur else ""))
         return True
+
     if check_only:
-        print("    （--check 只读；去掉 --check 即写入）")
+        cur = _describe_current_literal(spans)
+        for path in overwrite:
+            print(f"    [ ] {_short(path)} | {label}: 待写入"
+                  + (f"（当前值：{cur}）" if cur else ""))
         return True
+
     if dry_run:
-        print(f"    （--dry-run 未写盘；将修改 {len(planned)} 条 providerModelRules）")
+        print(f"[~] {asar}\n    {label}: 将重打包 {len(overwrite)} 个文件")
         return True
 
-    if not bak.is_file() and pc_path.is_file():
-        try:
-            shutil.copyfile(pc_path, bak)
-        except OSError as e:
-            print(f"[!] 备份失败：{e}")
-            return False
+    # sidecar 记录「改之前的原始字节」，只在首次创建（保留最早的干净副本）
+    if not side.is_file():
+        records = []
+        for path in overwrite:
+            ent = _asar_find_entry(header, path)
+            records.append({
+                "path": path,
+                "asar_size": asar_size,
+                "original_b64": base64.b64encode(
+                    _asar_entry_bytes(raw, data_start, ent)).decode("ascii"),
+            })
+        side.write_text(json.dumps({"patches": records}, ensure_ascii=False),
+                        encoding="utf-8")
 
-    for it in planned:
-        rule = by_key.get((it["pid"], it["mid"]))
-        if rule is None:
-            rule = {"modelId": it["mid"], "providerId": it["pid"], "config": {}}
-            rules.append(rule)
-            by_key[(it["pid"], it["mid"])] = rule
-        c = rule.get("config")
-        if not isinstance(c, dict):
-            c = rule["config"] = {}
-        props = c.get("properties")
-        if not isinstance(props, dict):
-            props = c["properties"] = {}
-        props.setdefault("contextWindow", it["ctx"])
-        specs = c.get("optionSpecs")
-        if not isinstance(specs, dict):
-            specs = c["optionSpecs"] = {}
-        specs["reasoningLevel"] = {"values": it["levels"], "map": it["map"]}
-        if it.get("max_tok"):
-            if "maxOutputTokens" in specs and isinstance(specs["maxOutputTokens"], dict):
-                specs["maxOutputTokens"]["max"] = it["max_tok"]
-            else:
-                specs["maxOutputTokens"] = {
-                    "max": it["max_tok"],
-                    "map": '{"max_tokens": maxOutputTokens}',
-                }
-
-    tmp = pc_path.with_name(pc_path.name + ".tmp")
-    try:
-        tmp.write_text(json.dumps(pc, ensure_ascii=False, indent=2), encoding="utf-8")
-        back = json.loads(tmp.read_text(encoding="utf-8"))
-        assert back["config"]["modelConfigRules"]["providerModelRules"] == rules
-        os.replace(tmp, pc_path)          # 原子替换，避免半截文件
-    except (OSError, ValueError, AssertionError, KeyError) as e:
-        tmp.unlink(missing_ok=True)
-        print(f"[!] 写入失败：{e}（请先完全退出 ZCode 再试）")
-        return False
-
-    print(f"[+] 已写入 {len(planned)} 个模型的档位（备份 {bak.name}）\n"
-          f"    → 重启 ZCode 后，界面档位列表即来自 provider_config.json；\n"
-          f"      请求体参数由内核按 optionSpecs.map 在发送前合并（无需内核补丁）")
+    _repack_asar(asar, overwrite, set())
+    print(f"[+] {asar}\n    {label}: 已写入 {len(overwrite)} 个文件（备份 {side.name}）")
     return True
+
+
+def _short(p: str | Path) -> str:
+    return str(p).replace("\\", "/").split("/")[-1]
+
+
+def process_display_name(asar: Path, check_only: bool, revert: bool, *,
+                         name: str | None = None,
+                         dry_run: bool = False) -> bool:
+    """把渲染层的显示名兜底字面量换成 name。
+
+    **name=None 等价于「强制写回 ZCodium」**：
+    用户跑 `/zcode-patch-setdisplayname` 不带参数时，期望就是看到 `ZCodium`，
+    而不是「恢复 asar 里原本的字面量」——后者由发行版决定，本机 ZCodium 1.0.2
+    实际是 `Bludoge`，还原出来仍不是用户要的 ZCodium。
+
+    `revert=True` 仍走 sidecar 还原（回到打补丁前的字节），
+    这是给「精确撤销」用的，与无参语义不同。
+    """
+    if name is None and not revert:
+        # 无参 = 强制写回 ZCodium（不依赖 sidecar / 发行版原值）
+        name = DEFAULT_DISPLAY_TARGET
+
+    if name is None:
+        # 仅 revert 路径会到这里：从 sidecar 还原原始字节。
+        # ⚠️ 必须把 check_only/dry_run 原样传下去：否则 `--check` 会真的去写盘。
+        return _process_asar_text_patch(
+            asar, check_only, True,
+            label="品牌名替换（还原）",
+            side_suffix=".name-patch.json",
+            find_spans=lambda raw, ds, h: _find_display_name_spans(raw, ds, h),
+            make_replacement=lambda _old: b"",       # 还原分支不会用到
+            dry_run=dry_run)
+
+    def find(raw, data_start, header):
+        return _find_display_name_spans(raw, data_start, header)
+
+    def repl(_old: bytes) -> bytes:
+        return name.encode("utf-8")
+
+    return _process_asar_text_patch(
+        asar, check_only, revert,
+        # 还原时不要显示「→ 名字」：那个名字对还原没有意义（原文来自 sidecar）
+        label=("品牌名替换（还原）" if revert
+               else f"品牌名替换 → {name}"),
+        side_suffix=".name-patch.json",
+        find_spans=find, make_replacement=repl, dry_run=dry_run)
+
+
+def _asar_sync_integrity(asar: Path, entry_path: str, new_bytes: bytes, *,
+                         dry_run: bool = False) -> None:
+    """同长度原地交换 asar 头里该条目的 integrity 记录，使记录与内容一致。
+    sha256 hex 定长（64），头部长度与全部 offset 零改动，保持零重打包特性。
+    实现要点：**只替换「该条目自己的 integrity 对象」那一段文本**——早期版本按哈希字符串
+    全局查找替换，当同一哈希串在头部出现两次（≤4MB 文件的整文件哈希 == 唯一块哈希，或
+    另一个内容完全相同的条目）时会误改到别的条目，此处改为整对象唯一定位。"""
+    with open(asar, "rb") as f:
+        head = f.read(16)
+        json_len = struct.unpack("<I", head[12:16])[0]
+        f.seek(16)
+        hdr = f.read(json_len)
+    ent = _asar_find_entry(json.loads(hdr.decode("utf-8")), entry_path)
+    itg = (ent or {}).get("integrity")
+    if not itg:
+        return
+    new_itg = _asar_integrity(new_bytes)
+    if itg == new_itg:
+        return
+    if len(itg.get("blocks") or []) != len(new_itg["blocks"]):
+        print(f"    [!] {entry_path} 的分块数变化，跳过 integrity 同步")
+        return
+    old_text = json.dumps(itg, separators=(",", ":")).encode()
+    new_text = json.dumps(new_itg, separators=(",", ":")).encode()
+    if len(old_text) != len(new_text):
+        print(f"    [!] {entry_path} 的 integrity 段长度变化，跳过同步")
+        return
+
+    # 定位方式①（首选）：用条目自己的 size/offset 前缀锚定，再核对紧随其后的对象文本。
+    # offset 唯一，因此这对锚点在整个头部里唯一，同内容条目也不会互相误伤。
+    pos = -1
+    try:
+        prefix = f'"size":{int(ent["size"])},"offset":"{ent["offset"]}","integrity":'.encode()
+        if hdr.count(prefix) == 1:
+            start = hdr.find(prefix) + len(prefix)
+            if hdr[start:start + len(old_text)] == old_text:
+                pos = start
+    except (KeyError, TypeError, ValueError):
+        pass
+    # 定位方式②（兜底）：整段对象文本在头部唯一
+    if pos < 0 and hdr.count(old_text) == 1:
+        pos = hdr.find(old_text)
+    if pos < 0:
+        print(f"    [!] {entry_path} 的 integrity 段无法唯一定位，跳过同步（内容已改、记录未同步）")
+        return
+    if dry_run:
+        print(f"    [~] 将同步 {entry_path} 的 integrity 记录")
+        return
+    with open(asar, "r+b") as f:
+        f.seek(16 + pos)
+        f.write(new_text)
 
 
 def _pad_display(text: str, width: int) -> str:
@@ -3410,9 +2767,13 @@ def prune_artifacts(asars: list[Path], deep: bool, dry_run: bool = False) -> int
             collect(folder / "glm", ("zcode.cjs.bak.stale-*",))
 
     if deep:
-        v2 = _v2_root(None)
-        collect(v2, ("provider_config.json.reasoning-bak", "config.json.puller-bak",
-                     "provider_config.json.puller-bak", "provider_config.json.tmp"))
+        # puller 的 CLI 版写的是 ~/.zcode（或 ~/.zcodium）/v2 下的备份，一并清理
+        home = Path.home()
+        for name in ("zcode", "zcodium"):
+            v2 = home / name / "v2"
+            if v2.is_dir():
+                collect(v2, ("config.json.puller-bak",
+                             "provider_config.json.puller-bak", "provider_config.json.tmp"))
 
     targets = sorted(set(targets))
     if not targets:
@@ -3508,8 +2869,8 @@ def zcode_running() -> bool:
 def main() -> int:
     safe_stdio()          # 输出被重定向时 cp936 会编不出 ✓/✗，先把这条路封死
     ap = argparse.ArgumentParser(
-        description="ZCodium / ZCode 客户端补丁工具：思考档位（3.14+ 配置侧原生 / ≤3.11 内核补丁）"
-                    " + 用量页去截断 + TPS 统计栏 + 思考滑条 + 模型拉取按钮（自动探测安装位置）")
+        description="ZCodium / ZCode 客户端补丁工具：用量页去截断 + 模型弹窗加宽 + TPS 统计栏"
+                    " + 思考滑条 + 模型拉取按钮 + 增强提示词 + 品牌名替换（自动探测安装位置）")
     ap.add_argument("target", nargs="?", help="可选：安装根目录或 zcode.cjs 路径；缺省自动探测全部")
     mode_g = ap.add_mutually_exclusive_group()
     mode_g.add_argument("--check", action="store_true", help="只检查状态，不修改")
@@ -3518,17 +2879,10 @@ def main() -> int:
     ap.add_argument("--force", action="store_true",
                     help="跳过备份指纹校验（备份与当前文件不是同一版本时强制继续，慎用）")
     ap.add_argument("--verbose", action="store_true", help="打印安装探测的每一步结果")
-    ap.add_argument("--extract", action="store_true",
-                    help="按结构特征提取当前内核的档位解析函数锚点（新版本升级后用）")
     ap.add_argument("--all", action="store_true",
                     help="对所有功能生效（等价于同时给出全部补丁参数）："
                          "`--all --check` 一条命令体检全部功能，`--all` 全部打上，"
                          "`--all --revert` 全部还原")
-    ap.add_argument("--reasoning-config", action="store_true",
-                    help="【3.14+ 推荐】把 config.json 的档位写进 provider_config.json 的 "
-                         "optionSpecs（原生机制，无需内核补丁）")
-    ap.add_argument("--v2-root", default=None,
-                    help="覆盖 ZCode v2 配置根目录（默认按 setting.json 的 dataBaseDir 解析）")
     ap.add_argument("--usage-chart", action="store_true",
                     help="补丁用量页：去掉趋势图 Top6 与饼图 Top5+其他模型 的截断，全部模型展示")
     ap.add_argument("--model-width", action="store_true",
@@ -3555,8 +2909,6 @@ def main() -> int:
     ap.add_argument("--name", default=None,
                     help=f"配合 --display-name：目标名字（示例：{DEFAULT_DISPLAY_NAME}）。"
                          f"不给出时强制写回 ZCodium")
-    ap.add_argument("--window-id-fix", action="store_true",
-                    help="修 ZCodium 1.0.2 的 disposeWindow(browserWindowId) 未定义变量缺陷")
     ap.add_argument("--prune", action="store_true",
                     help="清理安装目录里的补丁产物（旧版本归档 / 临时文件残留）")
     ap.add_argument("--deep", action="store_true",
@@ -3587,7 +2939,7 @@ def main() -> int:
 
     asar_flags = any((args.usage_chart, args.model_width, args.tps_footer,
                       args.thought_slider, args.model_puller, args.enhance_prompt,
-                      args.display_name, args.window_id_fix))
+                      args.display_name))
     mode = "检查" if args.check else ("还原" if args.revert else ("预演" if args.dry_run else "打补丁"))
     fails: list[str] = []
     results: list[tuple[str, str, bool]] = []      # (补丁名, 目标, 是否成功)
@@ -3604,7 +2956,7 @@ def main() -> int:
             fails.append(f"{title} @ {target}")
 
     # ---------- 预检：运行中一律不打补丁（asar 被锁、配置会被回写） ----------
-    if (asar_flags or args.reasoning_config) and not args.check and not args.dry_run:
+    if asar_flags and not args.check and not args.dry_run:
         if zcode_running():
             print("[!] 检测到 ZCode 正在运行 —— 打补丁/还原前请完全退出 ZCode")
             print("    运行中 app.asar 会被锁定；config.json / provider_config.json 也可能被客户端回写覆盖")
@@ -3644,9 +2996,6 @@ def main() -> int:
             (args.display_name, "品牌名替换",
              lambda a: process_display_name(a, args.check, args.revert,
                                             name=args.name, dry_run=args.dry_run)),
-            (args.window_id_fix, "窗口 ID 缺陷修复",
-             lambda a: process_window_id_fix(a, args.check, args.revert,
-                                             dry_run=args.dry_run)),
         ]
         for enabled, title, fn in steps:
             if not enabled:
@@ -3655,37 +3004,6 @@ def main() -> int:
             for a in asars:
                 run_step(title, a, fn)
 
-    if args.reasoning_config:
-        v2 = _v2_root(args.v2_root)
-        print(f"=== 3.14+ 原生档位配置（provider_config.json），模式：{mode} ===")
-        run_step("3.14+ 原生档位配置", v2,
-                 lambda _t: process_reasoning_config(v2, args.check, args.revert,
-                                                     dry_run=args.dry_run))
-
-    if args.all or (not asar_flags and not args.reasoning_config):
-        targets = resolve_target(args.target)
-        if not targets:
-            print("[!] 未探测到任何 ZCode 安装；请把安装目录路径作为参数传入（加 --verbose 看探测细节）")
-            return 1
-        if args.extract:
-            for t in targets:
-                print(f"[*] {t}")
-                anchor = extract_anchor(t)
-                if anchor:
-                    print("[+] 提取成功，把下面整段加入脚本 ANCHORS 后重新运行打补丁：\n")
-                    print(f'    "<版本号>": (\n        {anchor!r}\n    ),')
-            return 0
-        version = None
-        try:
-            version = asar_version(targets[0].parent.parent / "app.asar")
-        except Exception:
-            pass
-        if not args.all:      # --all 时上面已打印过客户端版本横幅，避免重复
-            print(f"=== 客户端版本 {version or '未知'} | 探测到 {len(targets)} 处安装 | 模式：{mode} ===")
-        for t in targets:
-            run_step("思维强度内核补丁", t,
-                     lambda tt: process(tt, args.check, args.revert, dry_run=args.dry_run,
-                                        force=args.force, version=version))
 
     if results:
         print(f"\n=== 执行汇总（模式：{mode}）===")

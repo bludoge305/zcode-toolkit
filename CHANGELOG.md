@@ -11,6 +11,28 @@
 
 ## 本 fork 维护线（2026-10）
 
+### 0.6.40 — 移除三个不再适用的功能模块
+
+**移除**：思考档位配置（`--reasoning-config`）、思考等级内核补丁（无参执行）、
+窗口 ID 缺陷修复（`--window-id-fix`）。目标客户端是 ZCodium 发行版：
+内核走 optionSpecs 原生档位机制（两项档位功能在此不需要），窗口缺陷上游已修
+（此项无目标可改）。三者保留只会让 `--check` 永远输出「不适用」的噪声。
+
+- `zcode_patcher.py`：删除 `process`（内核补丁）、`process_reasoning_config` 及其
+  `_v2_root`/`_desired_levels`/`_is_zcodium_root`/`REASONING_MAP_*`、
+  `process_window_id_fix` 及 `RE_WINDOW_ID_BUG`，以及 `ANCHORS`/`HELPER`/`MARKER`/
+  `replacement_for`/`extract_anchor`/`detect_reasoning_mechanism`；
+  argparse 移除 `--reasoning-config`/`--v2-root`/`--extract`/`--window-id-fix`；
+  `--all` 现在只覆盖 7 项 asar 补丁；`prune --deep` 改为内联数据目录定位清理 puller 备份。
+- `sync.py` / `apply_after_exit.py` / `doctor.py`：同步移除三个开关及其特殊分支
+  （reasoning_config 的"不托管"语义、core_patch 的空参数批处理）。
+- `plugin.json`：开关从 10 个减为 7 个。
+- 命令文档与 SKILL.md 同步更新；`autopilot.py` 的部署参数同步精简。
+
+验证：323 项测试全绿（原 350 项，删除对应用例后净减 27）；`--all --check` 7 项全命中；
+已移除的参数确实报 `unrecognized arguments`。
+
+
 ### 0.6.39 — 客户端 1.17.2 升级适配与看护容错加固
 
 客户端升级到 **1.17.2**（2026-10-28）后的维护：

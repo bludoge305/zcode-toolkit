@@ -57,7 +57,6 @@ REPO_NAME = "zcode-toolkit"
 MIN_PY = (3, 10)
 
 PATCH_KEYS = [
-    ("reasoning_config", "思考档位配置"),
     ("usage_chart", "用量页去截断"),
     ("model_width", "模型弹窗加宽"),
     ("tps_footer", "TPS 状态栏"),
@@ -65,13 +64,12 @@ PATCH_KEYS = [
     ("enhance_prompt", "增强提示词"),
     ("model_puller", "模型拉取按钮"),
     ("display_name", "品牌名替换"),
-    ("window_id_fix", "窗口 ID 缺陷修复"),
 ]
 # 「重打包级」= 要改写整个 app.asar（其余几项只改 provider_config.json / 字节级原地覆盖）。
 # 注意：**生效时机上各项没有区别** —— zcode_patcher.py 只要发现客户端在跑就一律拒绝写入，
 # 所以都得等退出后由看护写。这个集合只用来区分「改的东西有多重」，不再代表「要不要重启」。
 REPACK_KEYS = {"tps_footer", "thought_slider", "enhance_prompt", "model_puller",
-               "display_name", "window_id_fix"}
+               "display_name"}
 
 OK, WARN, BAD, INFO = "  [√]", "  [!]", "  [×]", "  [i]"
 
@@ -444,9 +442,7 @@ def check_options() -> bool:
             print(f"        {label:<14} {key} = {saved[key]}{tag}")
             if on:
                 on_keys.append(key)
-    if "core_patch" in saved:
-        print(f"        {'思考档位内核补丁':<14} core_patch = {saved['core_patch']}")
-    unknown = [k for k in saved if k not in dict(PATCH_KEYS) and k != "core_patch"]
+    unknown = [k for k in saved if k not in dict(PATCH_KEYS)]
     for k in unknown:
         print(f"        (未知键) {k} = {saved[k]}")
     if on_keys:

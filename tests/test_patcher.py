@@ -114,13 +114,6 @@ def patcher_stubbed(sync, states=None, verdicts=None):
         sync.check_state, sync.run_patcher, sync.start_watchdog = orig
 
 
-def make_cjs(anchor: str, prefix: str = "/*pre*/", suffix: str = "/*post*/",
-             newline: str = "\n") -> bytes:
-    """用真实锚点拼一个假的 zcode.cjs（含换行，用于验证字节级改写）。"""
-    body = f"{prefix}{newline}{anchor}{newline}{suffix}{newline}"
-    return body.encode("utf-8")
-
-
 class TempCase(unittest.TestCase):
     def setUp(self):
         # Windows 上临时目录偶尔会被索引/杀软短暂占用，cleanup 失败不该让测试变红
@@ -516,90 +509,6 @@ class TestReplaceWithRetry(TempCase):
 
 # ------------------------------------------------------------------ 内核补丁（≤3.11）
 
-class TestKernelPatch(TempCase):
-    ANCHOR = zp.ANCHORS["3.11.2"]
-
-    def setUp(self):
-        super().setUp()
-        self.cjs = self.tmp / "zcode.cjs"
-        self.original = make_cjs(self.ANCHOR)
-        self.cjs.write_bytes(self.original)
-
-    def patch(self, **kw):
-        return quiet(zp.process, self.cjs, False, False, **kw)
-
-    def revert(self, **kw):
-        return quiet(zp.process, self.cjs, False, True, **kw)
-
-    def test_patch_then_check_then_revert(self):
-        self.assertTrue(self.patch())
-        self.assertIn(zp.MARKER.encode(), self.cjs.read_bytes())
-        self.assertNotIn(self.ANCHOR.encode(), self.cjs.read_bytes())
-        self.assertTrue(quiet(zp.process, self.cjs, True, False))   # --check
-        self.assertTrue(self.revert())
-        self.assertEqual(self.cjs.read_bytes(), self.original)
-
-    def test_patch_preserves_bytes_and_crlf(self):
-        """关键回归：改补丁不能顺手把整个文件的 CRLF 归一为 LF。"""
-        self.cjs.write_bytes(make_cjs(self.ANCHOR, newline="\r\n"))
-        before = self.cjs.read_bytes()
-        crlf_before = before.count(b"\r\n")
-        self.assertTrue(self.patch())
-        after = self.cjs.read_bytes()
-        self.assertGreater(crlf_before, 0)
-        self.assertEqual(after.count(b"\r\n"), crlf_before, "CRLF 数量被改变（文本模式读写回归）")
-        # 只在锚点处新增字节：前后缀必须原样保留
-        self.assertTrue(after.startswith(b"/*pre*/"))
-        self.assertTrue(after.endswith(b"/*post*/\r\n"))
-
-    def test_backup_fingerprint_blocks_cross_version_revert(self):
-        """升级后（内核被替换）还原必须被拒绝，且不得改动文件。"""
-        self.assertTrue(self.patch())
-        upgraded = make_cjs(self.ANCHOR.replace("RD", "QQ"), prefix="/*new-kernel*/")
-        self.cjs.write_bytes(upgraded)
-        self.assertFalse(self.revert(), "跨版本还原竟然成功了")
-        self.assertEqual(self.cjs.read_bytes(), upgraded, "拒绝还原时不应改动文件")
-        self.assertTrue(self.revert(force=True), "--force 应可强制还原")
-
-    def test_patch_after_upgrade_archives_stale_backup(self):
-        """升级到另一个已支持版本后重打：旧备份要归档（改名 .stale-*），并按新内核重建。"""
-        self.assertTrue(self.patch())
-        upgraded = make_cjs(zp.ANCHORS["3.9.2"], prefix="/*upgraded-kernel*/")
-        self.cjs.write_bytes(upgraded)
-        self.assertTrue(self.patch())
-        # glob 必须排除 .meta.json：_archive_backup 会把 bak 与 bak.meta.json 一起改名成
-        # stale-*，两者都命中该模式；目录枚举顺序（APFS 按名字哈希）随时间戳变化，
-        # stale[0] 取到谁是随机的——曾表现为同代码 10 跑 4~6 挂的 flaky。
-        stale = [p for p in self.tmp.glob("zcode.cjs.bak.stale-*")
-                 if not p.name.endswith(".meta.json")]
-        self.assertTrue(stale, "旧备份未归档")
-        meta = json.loads((self.tmp / "zcode.cjs.bak.meta.json").read_text(encoding="utf-8"))
-        self.assertEqual(meta["sha256"], zp._sha256(upgraded), "备份不是升级后内核的原始副本")
-        self.assertEqual(meta["patched_sha256"], zp._sha256(self.cjs.read_bytes()))
-        self.assertEqual(stale[0].read_bytes(), make_cjs(self.ANCHOR), "归档内容应是旧内核原始副本")
-
-    def test_dry_run_does_not_write(self):
-        before = self.cjs.read_bytes()
-        self.assertTrue(self.patch(dry_run=True))
-        self.assertEqual(self.cjs.read_bytes(), before, "dry-run 竟然写了盘")
-        self.assertFalse((self.tmp / "zcode.cjs.bak").exists(), "dry-run 不应创建备份")
-
-    def test_unknown_structure_is_refused(self):
-        self.cjs.write_bytes(b"/* totally different kernel */")
-        self.assertFalse(self.patch(), "结构未知时必须拒绝盲改")
-
-    def test_native_mechanism_is_reported_as_not_applicable(self):
-        """3.14+ 内核（有 optionSpecs、无 defaultVariant）应判为原生机制并跳过。"""
-        self.cjs.write_bytes(b"/* kernel with optionSpecs and no legacy symbols */")
-        self.assertEqual(zp.detect_reasoning_mechanism(self.cjs), "native")
-        self.assertTrue(self.patch(), "原生机制应视为「无需改动」而非失败")
-
-    def test_replacement_contains_helper_and_marker(self):
-        patched = zp.replacement_for(self.ANCHOR)
-        self.assertIn(zp.MARKER, patched)
-        self.assertIn("providerOptionsByLevel", patched)
-
-
 # ------------------------------------------------------------------ 3.14+ 档位配置
 
 CONFIG_FIXTURE = {
@@ -645,102 +554,6 @@ PROVIDER_CONFIG_FIXTURE = {
         },
     },
 }
-
-
-class TestReasoningConfig(TempCase):
-    def setUp(self):
-        super().setUp()
-        self.root = self.tmp / "v2"
-        self.root.mkdir()
-        (self.root / "config.json").write_text(
-            json.dumps(CONFIG_FIXTURE, ensure_ascii=False), encoding="utf-8")
-        self.pc_path = self.root / "provider_config.json"
-        self.pc_path.write_text(
-            json.dumps(PROVIDER_CONFIG_FIXTURE, ensure_ascii=False), encoding="utf-8")
-        self.orig_pc = self.pc_path.read_text(encoding="utf-8")
-
-    def run_cfg(self, check=False, revert=False, dry_run=False):
-        return quiet(zp.process_reasoning_config, self.root, check, revert, dry_run=dry_run)
-
-    def rules(self):
-        pc = json.loads(self.pc_path.read_text(encoding="utf-8"))
-        return pc["config"]["modelConfigRules"]["providerModelRules"]
-
-    def rule(self, model_id):
-        return next(r for r in self.rules() if r["modelId"] == model_id)
-
-    def test_write_creates_option_specs(self):
-        self.assertTrue(self.run_cfg())
-        rl = self.rule("m-variants")["config"]["optionSpecs"]["reasoningLevel"]
-        # defaultVariant 要排到末位（3.14 约定：values 末位即默认档）
-        self.assertEqual(rl["values"], ["low", "max", "high"])
-        self.assertIn("reasoning_effort", rl["map"])
-        self.assertIn("contextWindow", self.rule("m-variants")["config"]["properties"])
-        mot = self.rule("m-variants")["config"]["optionSpecs"]["maxOutputTokens"]
-        self.assertEqual(mot["max"], 32000)
-        self.assertIn("maxOutputTokens", mot["map"])
-
-    def test_new_rule_gets_context_window(self):
-        """config.json 里存在但 providerModelRules 缺失的模型要新建规则（含 contextWindow）。"""
-        pc = json.loads(self.pc_path.read_text(encoding="utf-8"))
-        pc["config"]["modelConfigRules"]["providerModelRules"] = [
-            r for r in pc["config"]["modelConfigRules"]["providerModelRules"]
-            if r["modelId"] != "m-specs"]
-        self.pc_path.write_text(json.dumps(pc, ensure_ascii=False), encoding="utf-8")
-        self.assertTrue(self.run_cfg())
-        self.assertEqual(self.rule("m-specs")["config"]["properties"]["contextWindow"], 100000)
-
-    def test_manual_conflicts_are_skipped(self):
-        self.assertTrue(self.run_cfg())
-        keys = {(r["providerId"], r["modelId"]) for r in self.rules()}
-        manual = json.loads(self.pc_path.read_text(encoding="utf-8"))[
-            "config"]["modelConfigRules"]["manualProviderModelRules"]
-        manual_keys = {(r["providerId"], r["modelId"]) for r in manual}
-        self.assertFalse(keys & manual_keys, "同一模型同时出现在两个规则列表（内核会整表降级）")
-
-    def test_preexisting_duplicate_is_reported_not_silently_ignored(self):
-        """已存在的重复声明（同一模型在两个列表）要报警——它是「模型全没了」的成因。"""
-        pc = json.loads(self.pc_path.read_text(encoding="utf-8"))
-        pc["config"]["modelConfigRules"]["providerModelRules"].append(
-            {"modelId": "m-manual", "providerId": "custom-a",
-             "config": {"properties": {"contextWindow": 1}}})
-        self.pc_path.write_text(json.dumps(pc, ensure_ascii=False), encoding="utf-8")
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            zp.process_reasoning_config(self.root, True, False)
-        self.assertIn("降级为空", buf.getvalue())
-
-    def test_builtin_provider_untouched(self):
-        self.assertTrue(self.run_cfg())
-        self.assertFalse([r for r in self.rules() if r["providerId"] == "builtin:zai"])
-
-    def test_models_without_levels_are_skipped(self):
-        self.assertTrue(self.run_cfg())
-        self.assertFalse([r for r in self.rules() if r["modelId"] == "m-plain"
-                          and "optionSpecs" in (r.get("config") or {})])
-
-    def test_idempotent_and_dry_run_and_revert(self):
-        self.assertTrue(self.run_cfg(dry_run=True))
-        self.assertEqual(self.pc_path.read_text(encoding="utf-8"), self.orig_pc, "dry-run 写了盘")
-
-        self.assertTrue(self.run_cfg())
-        snapshot = self.pc_path.read_bytes()
-        self.assertTrue(self.run_cfg())                      # 二次运行
-        self.assertEqual(self.pc_path.read_bytes(), snapshot, "非幂等：二次运行改动了文件")
-        self.assertTrue((self.root / "provider_config.json.reasoning-bak").is_file())
-
-        self.assertTrue(self.run_cfg(revert=True))
-        self.assertEqual(self.pc_path.read_text(encoding="utf-8"), self.orig_pc, "还原内容不一致")
-        self.assertFalse((self.root / "provider_config.json.reasoning-bak").exists())
-
-    def test_json_written_is_valid_and_atomic(self):
-        self.assertTrue(self.run_cfg())
-        json.loads(self.pc_path.read_text(encoding="utf-8"))   # 必须是合法 JSON
-        self.assertFalse(list(self.root.glob("*.tmp")), "残留了临时文件")
-
-    def test_missing_config_is_reported(self):
-        (self.root / "config.json").unlink()
-        self.assertFalse(self.run_cfg())
 
 
 # ------------------------------------------------------------------ sidecar 指纹
@@ -980,8 +793,7 @@ class TestRealInstall(unittest.TestCase):
 # ------------------------------------------------------------------ 模块符号与注入块
 
 class TestModuleSurface(unittest.TestCase):
-    """防止重构时误删符号——本轮就真发生过：整段替换把 _read_asar_header 与
-    REASONING_MAP_* 一起删掉，直到跑测试才暴露。"""
+    """模块符号表：防止「改实现时顺手删了被外部引用的符号」——本轮就真发生过。"""
 
     REQUIRED = [
         # asar 基础
@@ -991,20 +803,17 @@ class TestModuleSurface(unittest.TestCase):
         # 备份指纹
         "_ensure_backup", "_load_backup_meta", "_mark_backup_patched", "_archive_backup",
         # 内核补丁
-        "process", "replacement_for", "extract_anchor", "detect_reasoning_mechanism",
-        "ANCHORS", "HELPER", "MARKER",
         # 补丁入口
         "process_usage_chart", "process_model_width", "process_tps_footer",
         "process_thought_slider", "process_model_puller", "process_enhance_prompt",
-        "process_reasoning_config", "prune_artifacts", "_process_ipc_patch",
+        "prune_artifacts", "_process_ipc_patch",
         # 注入块（标记定界）
         "MODELS_BLOCK", "ENHANCE_BLOCK", "_block_mark", "_wrap_block", "_block_span",
         "_bridge_block_state",
         "_models_preload_block", "_models_main_block", "_models_preload_state", "_models_main_state",
         "_enhance_preload_block", "_enhance_main_block", "_enhance_preload_state", "_enhance_main_state",
         "PULLER_SPEC", "ENHANCE_SPEC",
-        # 档位映射 / 路径常量
-        "REASONING_MAP_OPENAI", "REASONING_MAP_ANTHROPIC", "_desired_levels", "_v2_root",
+        # 路径常量
         "TPS_SCRIPT_PATH", "SLIDER_SCRIPT_PATH", "PULLER_SCRIPT_PATH", "ENHANCE_SCRIPT_PATH",
         "TPS_TAG", "SLIDER_TAG", "PULLER_TAG", "ENHANCE_TAG",
         # --all 一键操作
@@ -1040,17 +849,10 @@ class TestAllFlag(unittest.TestCase):
     def test_all_covers_every_plugin_switch(self):
         """插件开关表（sync.py 的 PATCHES）与 --all 必须一一对应，否则
         「在插件里能开关、但命令行 --all 覆盖不到」这类不一致会悄悄存在。
-        例外只有 core_patch：它是无参数的内核补丁（≤3.11 专用）。"""
+        「在插件里能开关、但命令行 --all 覆盖不到」这类不一致会悄悄存在。"""
         import sync
         switch_keys = {key for key, _args, _repack in sync.PATCHES}
-        self.assertEqual(switch_keys - {"core_patch"}, set(zp.ALL_PATCH_FLAGS))
-
-    def test_kernel_patch_is_included_by_all(self):
-        """内核补丁没有命令行参数，--all 走的是 main() 里的分支条件，
-        这里守住「--all 时该分支一定会跑」这个前提。"""
-        src = Path(zp.__file__).read_text(encoding="utf-8")
-        self.assertIn("if args.all or (not asar_flags and not args.reasoning_config):", src)
-
+        self.assertEqual(switch_keys, set(zp.ALL_PATCH_FLAGS))
 
 class TestMarketplaceManifest(unittest.TestCase):
     """marketplace.json 与 plugin.json 的一致性。ZCode 对这两份清单有两条硬性要求，
@@ -1092,60 +894,6 @@ class TestMarketplaceManifest(unittest.TestCase):
                   self.market_path.parent / src).resolve()
         self.assertTrue((target / ".zcode-plugin" / "plugin.json").is_file(),
                         f"source {src!r} 解析到 {target}，那里没有 .zcode-plugin/plugin.json")
-
-
-class TestCheckStateWording(unittest.TestCase):
-    """check_state() 必须认得每一套 `--check` 输出措辞。
-
-    锁死的是一个真实故障：`--reasoning-config --check` 打的是
-    「[ ] …（新建规则）」/「[=] 档位配置已是最新，无需写入」，一个
-    `已打 / 未打 / 不适用` 都没有 → 判定落回 unknown → sync 报
-    「未处理: reasoning_config(状态未知)」，这个开关**既不会被写入也不会被还原**。
-    注意不能用「已是最新」判 on：有待写入项时它也会打印（说的是另外 N 个已配好的模型）。
-    """
-
-    def _state(self, text: str) -> str:
-        import sync
-
-        class _R:
-            returncode = 0
-            stdout = text
-            stderr = ""
-
-        class _FakeSub:
-            run = staticmethod(lambda *a, **kw: _R())
-
-        orig = sync.subprocess
-        sync.subprocess = _FakeSub          # 只换 sync 里的名字，不动全局 subprocess
-        try:
-            return sync.check_state(["--reasoning-config"])
-        finally:
-            sync.subprocess = orig
-
-    def test_reasoning_config_pending_is_off(self):
-        out = ("=== 3.14+ 原生档位配置（provider_config.json），模式：检查 ===\n"
-               "    [ ] openai/tierflow  →  4 档 off/low/high/max  （新建规则，来源 config.optionSpecs）\n"
-               "    已是最新 12 个：a/b, c/d\n")
-        self.assertEqual(self._state(out), "off")
-
-    def test_reasoning_config_uptodate_is_on(self):
-        out = ("=== 3.14+ 原生档位配置（provider_config.json），模式：检查 ===\n"
-               "    已是最新 12 个：a/b, c/d\n"
-               "[=] F:\\ZcodeData\\.zcode\\v2\\provider_config.json\n"
-               "    档位配置已是最新，无需写入\n")
-        self.assertEqual(self._state(out), "on")
-
-    def test_kernel_not_applicable_wins_over_reasoning_branch(self):
-        """内核补丁的「不适用」必须优先判成 na（它的提示里也带「原生档位机制」）。"""
-        out = "    [i] 该内核使用 3.14+ 原生档位机制（optionSpecs），本补丁不适用："
-        self.assertEqual(self._state(out), "na")
-
-    def test_byte_level_wording_still_works(self):
-        self.assertEqual(self._state("    [=] a.js | 已打（每日趋势图）"), "on")
-        self.assertEqual(self._state("    [ ] a.js | 未打（每日趋势图）"), "off")
-
-    def test_unrecognized_output_is_unknown(self):
-        self.assertEqual(self._state("完全看不懂的输出"), "unknown")
 
 
 class TestScriptInjectStaleDetection(TempCase):
@@ -1791,7 +1539,7 @@ class TestDoctor(unittest.TestCase):
     def test_patch_key_table_covers_every_switch(self):
         import doctor
         import sync
-        self.assertEqual({k for k, _label in doctor.PATCH_KEYS} | {"core_patch"},
+        self.assertEqual({k for k, _label in doctor.PATCH_KEYS},
                          {k for k, _args, _repack in sync.PATCHES},
                          "doctor 的开关表漏项 → 自检报告会漏掉某个功能的状态")
 
@@ -2258,8 +2006,8 @@ class TestSearchMatchesOnlyOurPlugin(unittest.TestCase):
         注意把 -extra 放在前面 —— 修复前的实现会先撞上它。
         """
         cfg = {"plugins": {
-            "zcode-tokenspeed-extra@mkt": {"reasoning_config": False, "enhance_prompt": False},
-            "zcode-tokenspeed@mkt": {"reasoning_config": True, "enhance_prompt": True},
+            "zcode-tokenspeed-extra@mkt": {"usage_chart": False, "enhance_prompt": False},
+            "zcode-tokenspeed@mkt": {"usage_chart": True, "enhance_prompt": True},
         }}
         got = self.sync._search(cfg, "config.json")
         self.assertIsNotNone(got, "应能找到本插件配置")
@@ -2269,7 +2017,7 @@ class TestSearchMatchesOnlyOurPlugin(unittest.TestCase):
 
     def test_search_returns_none_when_only_other_plugins_present(self):
         """只有同前缀的**别的插件**时，不能认领 —— 否则会拿别人的配置去注入。"""
-        cfg = {"plugins": {"zcode-tokenspeed-extra@mkt": {"reasoning_config": True}}}
+        cfg = {"plugins": {"zcode-tokenspeed-extra@mkt": {"usage_chart": True}}}
         self.assertIsNone(self.sync._search(cfg, "config.json"))
 
 
@@ -2493,10 +2241,10 @@ class TestAutoInject(unittest.TestCase):
     def test_run_sync_skips_switches_that_do_not_apply(self):
         """na 的开关既不执行也不报错，只在结论里注明「本版本不适用」。"""
         orig = (self.sync.read_options, self.sync.declared_defaults)
-        self.sync.read_options = lambda: ({"core_patch": True}, "config")
+        self.sync.read_options = lambda: ({"usage_chart": True}, "config")
         self.sync.declared_defaults = lambda: {}
         try:
-            with patcher_stubbed(self.sync, {(): "na"}) as calls:
+            with patcher_stubbed(self.sync, {("--usage-chart",): "na"}) as calls:
                 summary = self.sync.run_sync(echo=False)
         finally:
             self.sync.read_options, self.sync.declared_defaults = orig
@@ -2507,10 +2255,10 @@ class TestAutoInject(unittest.TestCase):
     def test_na_is_skipped_even_when_user_asked_for_it(self):
         """用户显式打开也不该去跑不适用的补丁——照样只标注、不执行。"""
         orig = (self.sync.read_options, self.sync.declared_defaults)
-        self.sync.read_options = lambda: ({"core_patch": False}, "config")
+        self.sync.read_options = lambda: ({"usage_chart": False}, "config")
         self.sync.declared_defaults = lambda: {}
         try:
-            with patcher_stubbed(self.sync, {(): "na"}) as calls:
+            with patcher_stubbed(self.sync, {("--usage-chart",): "na"}) as calls:
                 summary = self.sync.run_sync(echo=False)
         finally:
             self.sync.read_options, self.sync.declared_defaults = orig
@@ -2533,26 +2281,26 @@ class TestAutoInject(unittest.TestCase):
         否则用户看到的就是「未处理: xxx(执行失败)」而**永远不生效** ——
         SessionStart 钩子必然在 ZCode 运行中触发，所以这条路是常态而非例外。
         """
-        orig = self._resolve_only({"reasoning_config": True})
+        orig = self._resolve_only({"usage_chart": True})
         try:
             with patcher_stubbed(self.sync,
-                                 {("--reasoning-config",): "off"},
-                                 {("--reasoning-config",): "refused"}) as calls:
+                                 {("--usage-chart",): "off"},
+                                 {("--usage-chart",): "refused"}) as calls:
                 summary = self.sync.run_sync(echo=False)
         finally:
             self.sync.read_options, self.sync.declared_defaults = orig
-        self.assertEqual(calls, [("run", ("--reasoning-config",), False),
-                                 ("watchdog", {"reasoning_config": True})])
+        self.assertEqual(calls, [("run", ("--usage-chart",), False),
+                                 ("watchdog", {"usage_chart": True})])
         self.assertNotIn("未处理", summary)
         self.assertIn("ZCode 退出时写入", summary)
 
     def test_hard_failure_is_still_reported(self):
         """真正的失败（锚点不匹配等）不能被「被拒」这条新分支吞掉。"""
-        orig = self._resolve_only({"reasoning_config": True})
+        orig = self._resolve_only({"usage_chart": True})
         try:
             with patcher_stubbed(self.sync,
-                                 {("--reasoning-config",): "off"},
-                                 {("--reasoning-config",): "fail"}) as calls:
+                                 {("--usage-chart",): "off"},
+                                 {("--usage-chart",): "fail"}) as calls:
                 summary = self.sync.run_sync(echo=False)
         finally:
             self.sync.read_options, self.sync.declared_defaults = orig
@@ -2562,17 +2310,17 @@ class TestAutoInject(unittest.TestCase):
     def test_env_option_keys_are_lowercased(self):
         """Windows 上 os.environ 的键名是**大写**，读配置时必须归一。
 
-        不归一的话 `ZCODE_PLUGIN_CONFIG_reasoning_config` 会变成 `REASONING_CONFIG`，
+        不归一的话 `ZCODE_PLUGIN_CONFIG_tps_footer` 会变成 `TPS_FOOTER`，
         与开关名对不上 → `{**defaults, **explicit}` 里默认值（全 true）胜出，
         **用户保存的开关会被整体忽略**（静默失效，最难查）。
         """
         from unittest import mock
-        env = {"ZCODE_PLUGIN_CONFIG_REASONING_CONFIG": "false",
+        env = {"ZCODE_PLUGIN_CONFIG_TPS_FOOTER": "false",
                "ZCODE_PLUGIN_CONFIG_USAGE_CHART": "true"}
         with mock.patch.dict("os.environ", env, clear=False):
             opts, source = self.sync.read_options()
         self.assertEqual(source, "env")
-        self.assertEqual(opts, {"reasoning_config": False, "usage_chart": True})
+        self.assertEqual(opts, {"tps_footer": False, "usage_chart": True})
 
     def test_watchdog_knows_every_switch(self):
         """apply_after_exit 的参数表必须覆盖 sync.PATCHES 的每一个键。
@@ -2614,44 +2362,17 @@ class TestAutoInject(unittest.TestCase):
         # 第 2 步后应用
         self.assertEqual(batched_mixed[1], (["--tps-footer", "--model-puller"], False))
 
-        # ③ 内核补丁（空参数项）保持独立调用，不与 asar 标志混杂
-        core_tasks = [
-            (["--tps-footer"], False),
-            ([], False),
-        ]
-        batched_core = aae.batch_tasks(core_tasks)
-        self.assertEqual(len(batched_core), 2)
-        self.assertEqual(batched_core[0], (["--tps-footer"], False))
-        self.assertEqual(batched_core[1], ([], False))
 
-    def test_reasoning_config_off_does_not_revert_or_trigger_watchdog(self):
-        """Issue #5：思考档位配置关闭时语义为不托管，绝不主动还原 provider_config.json。
-
-        即使状态检查显示 on/stale，也绝对不执行 revert，不调度看护，防死循环重启。
-        """
-        orig = self._resolve_only({"reasoning_config": False})
-        try:
-            with patcher_stubbed(self.sync,
-                                 {("--reasoning-config",): "on"},
-                                 {("--reasoning-config",): "ok"}) as calls:
-                summary = self.sync.run_sync(echo=False)
-        finally:
-            self.sync.read_options, self.sync.declared_defaults = orig
-        self.assertEqual(calls, [], "关闭 reasoning_config 时应完全跳过，不得调用 patcher 或看护")
-        self.assertNotIn("已写入", summary)
-        self.assertNotIn("ZCode 退出时写入", summary)
-        self.assertNotIn("未处理", summary)
-
-    def test_apply_after_exit_ignores_reasoning_config_off_and_does_not_restart(self):
-        """Issue #5：看护进程收到 reasoning_config=off 时绝不执行 revert，无任务时直接退出。"""
+    def test_apply_after_exit_unknown_want_is_dropped(self):
+        """看护收到未知开关（如已移除的 reasoning_config）时忽略之，剩余任务正常执行。"""
         import apply_after_exit as aae
         orig_want = aae.WANT_FILE
         fake_want = self._d / "_fake_watchdog.want"
         aae.WANT_FILE = fake_want
         try:
             # 1. 单独 reasoning_config=off 应返回空任务列表，而不是 fallback 到 DEFAULT_TASKS
-            tasks = aae.parse_wants(["--want=reasoning_config=off"])
-            self.assertEqual(tasks, [], "单项 reasoning_config=off 应解析为空任务列表")
+            tasks = aae.parse_wants(["--want=reasoning_config=off"])   # 未知开关被忽略
+            self.assertEqual(tasks, [], "单项未知开关应解析为空任务列表")
 
             # 2. 混合任务应只保留其他开关
             mixed = aae.parse_wants(["--want=reasoning_config=off", "--want=model_width=on"])
@@ -2661,11 +2382,11 @@ class TestAutoInject(unittest.TestCase):
             default_res = aae.parse_wants([])
             self.assertIsNone(default_res)
 
-            # 4. _save_wants 绝不保存 reasoning_config=off，若已有也会被清除
-            fake_want.write_text(json.dumps({"reasoning_config": True, "model_width": True}), encoding="utf-8")
-            aae._save_wants(["--want=reasoning_config=off"])
+            # 4. _save_wants 不认识未知开关，不会把它写进 want 文件
+            fake_want.write_text(json.dumps({"tps_footer": True, "model_width": True}), encoding="utf-8")
+            aae._save_wants(["--want=reasoning_config=off"])   # 未知开关不写入
             saved = json.loads(fake_want.read_text(encoding="utf-8"))
-            self.assertNotIn("reasoning_config", saved)
+            self.assertNotIn("reasoning_config", saved)   # 未知开关不会复活
             self.assertTrue(saved.get("model_width"))
         finally:
             aae.WANT_FILE = orig_want
@@ -3004,9 +2725,8 @@ class TestConsoleEncoding(unittest.TestCase):
         self.assertNotIn("Traceback", out, out[-600:])
         self.assertIn("执行汇总", out)
         # 项数随补丁增减变化，用 ALL_PATCH_FLAGS 推导，避免每加一项就红一次。
-        # ALL_PATCH_FLAGS 里 reasoning_config 不产生 asar 级汇总行（它单独走配置分支），
-        # 所以汇总行数 = len(ALL_PATCH_FLAGS) + 1（内核补丁那一行）。
-        expected = len(zp.ALL_PATCH_FLAGS) + 1
+        # 现在 --all 只覆盖 asar 级补丁（与 ALL_PATCH_FLAGS 一一对应）。
+        expected = len(zp.ALL_PATCH_FLAGS)
         self.assertIn(f"合计 {expected} 项", out)
 
 
@@ -4434,40 +4154,6 @@ class TestDisplayNamePatch(TempCase):
         })
         self.assertTrue(zp.process_display_name(self.asar, False, False, name="Bludoge"))
         self.assertIn(b"`Bludoge`", self.read("out/renderer/a.js"))
-
-
-class TestWindowIdFix(TempCase):
-    def setUp(self):
-        super().setUp()
-        self.asar = self.tmp / "app.asar"
-
-    def read(self, p):
-        raw, header, ds = zp._asar_header_raw(self.asar)
-        return zp._asar_entry_bytes(raw, ds, zp._asar_find_entry(header, p))
-
-    def test_fixes_undefined_variable(self):
-        build_asar(self.asar, {
-            "out/main/index.js": b'function f(){var n=e.webContents.id;w.disposeWindow(browserWindowId)}',
-        })
-        self.assertTrue(zp.process_window_id_fix(self.asar, False, False))
-        blob = self.read("out/main/index.js")
-        self.assertIn(b".disposeWindow(n)", blob)
-        self.assertNotIn(b"browserWindowId", blob)
-
-    def test_absent_target_is_success(self):
-        """缺陷已被上游修掉时，不该报失败（否则每次 --all 都红一项）。"""
-        build_asar(self.asar, {
-            "out/main/index.js": b'function f(){w.disposeWindow(n);w.disposeWindow(t)}',
-        })
-        self.assertTrue(zp.process_window_id_fix(self.asar, False, False))
-        self.assertTrue(zp.process_window_id_fix(self.asar, True, False))
-
-    def test_revert(self):
-        src = b'function f(){var n=e.webContents.id;w.disposeWindow(browserWindowId)}'
-        build_asar(self.asar, {"out/main/index.js": src})
-        self.assertTrue(zp.process_window_id_fix(self.asar, False, False))
-        self.assertTrue(zp.process_window_id_fix(self.asar, False, True))
-        self.assertEqual(self.read("out/main/index.js"), src)
 
 
 # ------------------------------------------------------------------ 字符串型开关（display_name）

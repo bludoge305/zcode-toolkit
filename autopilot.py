@@ -849,10 +849,10 @@ def step_deploy(log: Logger, dry_run: bool, *, unattended: bool,
 
         # 看护的 --want 参数与 sync.py 保持同一套键名
         wants = [
-            "--want=reasoning_config=on", "--want=usage_chart=on",
+            "--want=usage_chart=on",
             "--want=model_width=on", "--want=tps_footer=on",
             "--want=thought_slider=on", "--want=enhance_prompt=on",
-            "--want=model_puller=on", "--want=core_patch=on",
+            "--want=model_puller=on",
         ]
         flags = 0x00000008 | 0x08000000 if os.name == "nt" else 0   # DETACHED|NO_WINDOW
         try:

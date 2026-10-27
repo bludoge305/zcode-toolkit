@@ -1,6 +1,7 @@
 ---
 name: zcode-tokenspeed
-description: "[仅手动调用，禁止自动触发] ZCodium / ZCode 客户端本地补丁注入工具：①思考档位配置（3.14+ 原生 optionSpecs，无需内核补丁）②思考档位透传（≤3.11 内核补丁）③用量页去截断（趋势图/饼图全量）④模型弹窗加宽 ⑤TPS 状态栏（输入框统计条：本轮指标+会话累计）⑥思考强度吸附滑条 ⑦增强提示词按钮（一键润色输入框草稿，右键可选润色所用模型）⑧设置页一键模型拉取按钮。全部幂等、可 --check、可 --revert 精确还原。只有当用户明确要求执行本 skill、或明确点名「zcode-tokenspeed」时才加载；用户只是泛泛提到思考等级、用量图、状态栏、补丁等话题时，一律不要自动触发本 skill。"
+description: "[仅手动调用，禁止自动触发] ZCodium / ZCode 客户端本地补丁注入工具：①用量页去截断（趋势图/饼图全量）②模型弹窗加宽 ③TPS 状态栏（输入框统计条：本轮指标+会话累计）④思考强度吸附滑条 ⑤增强提示词按钮（一键润色输入框草稿，右键可选润色所用模型）⑥设置页一键模型拉取按钮 ⑦品牌名替换（改界面显示名，无参写回 ZCodium）。全部幂等、可 --check、可 --revert 精确还原。只有当用户明确要求执行本 skill、或明确点名「zcode-tokenspeed」时才加载；用户只是泛泛提到用量图、状态栏、补丁等话题时，一律不要自动触发本 skill。"
+
 ---
 
 # ZCodium / ZCode 客户端补丁工具
@@ -50,8 +51,6 @@ python "<skill目录>/scripts/doctor.py" --where  # 只查「插件装在哪」+
 
 | 补丁 | 3.11.2 及更早 | 3.14.x ~ 3.15.x（实测 3.14.1 / 3.14.3 / 3.15.1） |
 |---|---|---|
-| ① 思考档位透传（内核补丁） | 需要，走 `providerOptionsByLevel` 兜底 | **已过时**：内核机制整体重写（`providerOptionsByLevel` 只剩 schema 定义，`variants/defaultVariant` 已从内核消失），锚点与结构提取都失效。脚本会提示「原生档位机制，本补丁不适用」 |
-| ①′ 档位配置 `--reasoning-config` | 不需要（用 ①） | **需要**：把档位写进 `provider_config.json` 的 `providerModelRules[].config.optionSpecs.reasoningLevel`（`values` = 界面档位、末位即默认；`map` = CEL，内核发请求前求值并合并进请求体；支持 `maxOutputTokens`）。无需内核补丁 |
 | ② 用量页去截断 | 需要 | 需要（已支持弹性正则动态匹配，抗混淆变量漂移） |
 | ③ 模型弹窗加宽 | 两处锚点 | 需要，但只剩**扁平弹窗**一处（渠道子菜单上游已改为自适应宽度 `w-max min-w-48`，脚本识别后报「无需补丁」） |
 | ④ TPS 状态栏 | 需要 | 需要（支持原生思考 Token 统计、耗时精准校准与双态按钮常驻追踪） |
@@ -63,15 +62,8 @@ python "<skill目录>/scripts/doctor.py" --where  # 只查「插件装在哪」+
 > 其中**重打包级**（④ TPS 状态栏 / ⑤ 模型拉取按钮 / ⑥ 思考强度滑条 / ⑦ 增强提示词）重跑时会按内容比对
 > 自动热更新脚本，无需先 `--revert`；② 用量图 / ③ 弹窗加宽是**字节级原地覆盖**，重跑即可。
 
-- 3.14.x 下**不要**再跑思考等级内核补丁（`python zcode_patcher.py` 不带参数那条）：脚本会明确提示
-  「该内核使用 3.14+ 原生档位机制（optionSpecs），本补丁不适用」——这不是故障，是预期行为。
-  档位配置改跑 `python zcode_patcher.py --reasoning-config`（见下节）。
-- **3.14.x 档位配置的标准命令**（把 `config.json` 的档位迁移进 `provider_config.json`）：
-  ```bash
-  python zcode_patcher.py --reasoning-config --check   # 只读：哪些模型已配/缺档位/已在界面手动配置过
-  python zcode_patcher.py --reasoning-config --dry-run # 预演：只报告将改哪几条规则
-  python zcode_patcher.py --reasoning-config           # 写入（先完全退出 ZCode）
-  python zcode_patcher.py --reasoning-config --revert  # 还原（provider_config.json.reasoning-bak）
+- **本 fork 已移除**：思考档位配置（`--reasoning-config`）、思考等级内核补丁（无参执行）、
+  窗口 ID 缺陷修复（`--window-id-fix`）三个模块；对应命令不再存在。
   ```
   已在界面「手动配置」过的模型（`manualProviderModelRules`）会自动跳过——内核 schema 禁止同一
   模型同时出现在两个规则列表，重复声明会让整份供应商配置降级为空。
@@ -98,16 +90,13 @@ python "<skill目录>/scripts/doctor.py" --where  # 只查「插件装在哪」+
 
 | 开关 | 控制的功能 | 默认 | 生效时机 |
 |---|---|---|---|
-| 思考档位配置（3.14+） | `--reasoning-config` | 开 | 客户端退出时自动应用，**再启动**才生效（两次启停） |
 | 用量页去截断 | `--usage-chart` | 开 | 客户端退出时自动应用，**再启动**才生效（两次启停） |
 | 模型弹窗加宽 | `--model-width` | 开 | 客户端退出时自动应用，**再启动**才生效（两次启停） |
 | TPS 状态栏 | `--tps-footer` | 开 | 客户端退出时自动应用，**再启动**才生效（两次启停） |
 | 思考强度滑条 | `--thought-slider` | 开 | 客户端退出时自动应用，**再启动**才生效（两次启停） |
 | 增强提示词按钮 | `--enhance-prompt` | 开 | 客户端退出时自动应用，**再启动**才生效（两次启停） |
 | 设置页模型拉取按钮 | `--model-puller` | 开 | 客户端退出时自动应用，**再启动**才生效（两次启停） |
-| 思考档位内核补丁（旧版专用） | 无参数 | 开 | 仅 ≤3.11.2 需要；3.14+ 自动跳过并报「本版本不适用」 |
 | 界面显示名称 | `--display-name --name <名字>` | **空串**（= 强制写回 ZCodium） | 值是名字本身（字符串型开关）；客户端退出时自动应用；空串表示「无参语义」：目标固定为 ZCodium |
-| 窗口 ID 缺陷修复 | `--window-id-fix` | 开 | 客户端退出时自动应用；客户端无该缺陷时报「目标不存在（已修复）」，属正常 |
 
 行为约定（`scripts/sync.py`，由 SessionStart hook 调用）：
 
@@ -118,7 +107,7 @@ python "<skill目录>/scripts/doctor.py" --where  # 只查「插件装在哪」+
   **这一条是「安装成功但不生效」的根治点**：客户端只在用户点过「保存配置」后才写
   `plugins.options`，旧逻辑把「没表态」当成「不要做」，于是装完重启什么都没发生、界面上也看不出原因。
 - **`na` 是必需的第三态**：`check_state()` 除了 `on` / `off` 还要能报 `na`（本版本不适用）。
-  ≤3.11 专用的内核补丁在 3.14+ 会打印「本补丁不适用」，若只看「未打」→ 去执行 → 脚本空转一圈，
+  （历史案例）≤3.11 专用的内核补丁在 3.14+ 曾打印「本补丁不适用」，若只看「未打」→ 去执行 → 脚本空转一圈，
   最后却报成「已生效」。默认值全开之后这个误报每次装完都会出现，必须单独成一态、只标注不执行。
 - **钩子是「登记心跳 + 后台化」就返回**（`sync.py --detach` → 子进程 `--worker`）。
   原因：hook 是**内联**执行的（`async` 字段当前无运行时效果），而同步要跑多次 `--check`
@@ -231,7 +220,6 @@ python "<skill目录>/scripts/zcode_patcher.py" --model-puller
 
 | 能力 | 说法 | 命令 | 改哪里 |
 |---|---|---|---|
-| **档位配置（3.14+）** | 给自定义模型配思考等级 | `python zcode_patcher.py --reasoning-config [--check/--revert]` | `provider_config.json` 的 `providerModelRules.optionSpecs`（配置侧原生，**不打内核**） |
 | 思考等级透传（≤3.11） | 给自定义模型配思考等级 | `python zcode_patcher.py [--check/--revert/--extract]` | 内核 zcode.cjs（原地改写，.bak 备份） |
 | 打开统计图 | 用量页趋势图/饼图去截断 | `python zcode_patcher.py --usage-chart [--check/--revert]` | app.asar 内渲染文件（同长度原地改字节 + integrity 同步） |
 | 打开状态栏 | 输入框下方居中统计条（**v2 纯 DOM 观测，3.12.2+ 安全**；右键可切工具栏/会话顶部 sticky）：本轮指标 + 会话累计（第 N 轮/输入/命中+平均命中率/累出） | `python zcode_patcher.py --tps-footer [--check/--revert]` | app.asar（重打包级：注入脚本 + 挂载 index.html） |
@@ -240,7 +228,6 @@ python "<skill目录>/scripts/zcode_patcher.py" --model-puller
 | **增强提示词** | 输入框旁一键润色草稿（可恢复原文）；**右键**弹出菜单选择使用哪个模型 | `python zcode_patcher.py --enhance-prompt [--check/--revert]` | app.asar（重打包级：renderer 脚本 + index.html + preload 桥 + main IPC） |
 | 模型拉取按钮 | 设置页一键拉取/勾选模型 | `python zcode_patcher.py --model-puller [--check/--revert]` | app.asar（重打包级：renderer 脚本 + index.html + preload 桥 + main IPC） |
 | **界面显示名称** | 改界面左下角显示名（不传 `--name` 则强制写回 ZCodium） | `python zcode_patcher.py --display-name --name "<名字>" [--check/--revert]` | app.asar（重打包级：按表达式上下文定位并替换字面量） |
-| 窗口 ID 缺陷修复 | 修 ZCodium 1.0.2 的 `disposeWindow(browserWindowId)` 未定义变量 | `python zcode_patcher.py --window-id-fix [--check/--revert]` | app.asar（重打包级） |
 
 > **界面显示名称是字符串型开关**：配置项 `display_name` 的值就是目标名字
 > （`plugins.options[...].display_name = "Bludoge"`）。
@@ -252,7 +239,7 @@ python "<skill目录>/scripts/zcode_patcher.py" --model-puller
 > `--check` 会打印当前实际值（如「待写入（当前值：Bludoge）」），可直接据此回答用户。
 
 两个及以上功能可一次执行：`python zcode_patcher.py --usage-chart --model-width --tps-footer --thought-slider --model-puller`。
-全部功能一条命令：`python zcode_patcher.py --all [--check/--revert]`（等价于写全上表所有补丁参数 + 内核补丁）。
+全部功能一条命令：`python zcode_patcher.py --all [--check/--revert]`（等价于写全上表所有补丁参数）。
 另有命令行版拉模型（不动 asar，直接同步 config.json + provider_config.json）：`python scripts/model_pull.py --all [--dry-run]`。
 
 **通用开关**：`--all`（对所有功能生效）· `--dry-run`（只报告改动不写盘）· `--verbose`（打印探测细节）· `--force`（跳过备份指纹校验，慎用）。
@@ -265,8 +252,6 @@ python "<skill目录>/scripts/zcode_patcher.py" --model-puller
 2. **只读核实**（能否生效的判断，全部只读，可放心先跑）：
    - `python zcode_patcher.py --all --check`：**一条命令看全部 10 项**（含客户端版本、10 行执行汇总表）。
      用户问「现在什么状态」「装好了吗」时先跑这条；下面各条是单项细看。
-   - `python zcode_patcher.py --reasoning-config --check`：**3.14.x 先看这个**——哪些模型已配档位、哪些缺档位、哪些已在界面手动配置过（冲突会跳过）。
-   - `python zcode_patcher.py --check`：内核补丁状态；输出「原生档位机制（optionSpecs），本补丁不适用」即 3.14+，直接走上面的 `--reasoning-config`；≤3.11 且版本不在「已知符号表」时跑 `--extract`——能提取出锚点即可生效，提取失败说明内核结构变了，按「新版本锚点提取」人工分析后再动。
    - `python zcode_patcher.py --usage-chart --check`：两个截断表达式是否命中。
    - `python zcode_patcher.py --model-width --check`：扁平弹窗锚点是否命中（3.14.x 渠道子菜单锚点已不存在，报「上游已改为自适应宽度，无需补丁」属预期）。
    - `python zcode_patcher.py --tps-footer --check`：index.html 是否找到、注入状态。
@@ -276,24 +261,18 @@ python "<skill目录>/scripts/zcode_patcher.py" --model-puller
      注入段按 `/*zp:begin:<块名>*/` 标记定界，两者可独立装卸、互不干扰）。
    - 脚本对「表达式出现次数 ≠1」「锚点不唯一」等情况一律拒绝盲改并报告原因——报告即结论，不要绕过。
 3. **确认备份就绪并展示还原命令**（打补丁前必须完成，AI 代执行时明确提示用户保存还原命令）：
-   - 档位配置：首次写入自动生成 `provider_config.json.reasoning-bak`
    - 思考等级：首次打补丁自动生成 `zcode.cjs.bak`（整文件备份）+ `zcode.cjs.bak.meta.json`（指纹）
    - 状态栏/滑条/拉取按钮：首次注入自动生成 `app.asar.<补丁>.bak`（整包备份，带 `.meta.json` 指纹）+ sidecar json
    - 统计图/弹窗加宽：sidecar `app.asar.chart-patch.json` / `app.asar.width-patch.json` 记录全部原始字节
    - **备份带版本指纹**：客户端升级覆盖内核/asar 后，旧备份指纹失配会被自动归档（改名 `.stale-<时间>`），
      还原时若当前文件与备份不同版本会**拒绝执行**（提示用 `--force` 或 `restore_clean.py`），
      避免"把旧版内核/asar 盖回新客户端"。
-4. **展示执行命令与还原命令**——**单功能单命令，按用户点名的功能给对应命令，不要捆绑其他功能**（各补丁相互独立；低风险的档位配置/思考等级/统计图 AI 可在核实与备份确认后直接代执行，重打包级的状态栏/滑条/拉取按钮交由用户执行）。以「打开状态栏」为例：
+4. **展示执行命令与还原命令**——**单功能单命令，按用户点名的功能给对应命令，不要捆绑其他功能**（各补丁相互独立；低风险的统计图/加宽 AI 可在核实与备份确认后直接代执行，重打包级的状态栏/滑条/拉取按钮交由用户执行）。以「打开状态栏」为例：
    ```bash
    # 执行
    python "<skill目录>/scripts/zcode_patcher.py" --tps-footer
    # 还原（万一异常，保存备用；完全退出 ZCode 后执行，还原后重启 ZCode）
    python "<skill目录>/scripts/zcode_patcher.py" --tps-footer --revert
-   ```
-   3.14.x 配档位则是：
-   ```bash
-   python "<skill目录>/scripts/zcode_patcher.py" --reasoning-config          # 写入
-   python "<skill目录>/scripts/zcode_patcher.py" --reasoning-config --revert # 还原
    ```
    人工自助时用户自行执行；AI 代执行时经用户确认后由 AI 运行，或用户复制命令自己跑。
    不确定会改什么时先加 `--dry-run` 预演（不写盘）。
@@ -393,8 +372,6 @@ python autopilot.py --max-retries 5                  # 提高可恢复错误的�
 ZCode 升级会覆盖 zcode.cjs 与 app.asar，升级后过一遍（**先完全退出 ZCode**；`--check` 不受此限）：
 
 ```bash
-python zcode_patcher.py --check                    # 思考等级：3.14+ 会提示"不需要本补丁"
-python zcode_patcher.py --reasoning-config --check # 档位配置（3.14+ 看这个）
 python zcode_patcher.py --usage-chart --check
 python zcode_patcher.py --model-width --check
 python zcode_patcher.py --tps-footer --check
@@ -405,104 +382,6 @@ python zcode_patcher.py --enhance-prompt --check
 
 失配的按「自助使用流程」重打；思考等级补丁在 ≤3.11 新内核上先 `--extract` 确认锚点可提取。
 重打包级补丁（状态栏/滑条/拉取按钮）被升级覆盖后直接重跑即可——旧备份会被自动归档，不会误还原。
-
-## 一、思考等级：完整结论一张表
-
-| 场景 | 档位来源 | 是否需要 config 配置 | 是否需要内核补丁 |
-|---|---|---|---|
-| 模型 id 含 "ox-alpha"，ZCode ≥ 3.9.1 | 内核硬编码白名单（`isOxAlphaReasoningModelId`），天生 low/high/max，defaultLevel=max | **不需要**（配了也是冗余） | **不需要** |
-| 其它模型，ZCode ≥ 3.9.1，标准档名（low/medium/high/xhigh/max） | 引擎原生通用表：anthropic → `thinking:{type:"adaptive"}` + `output_config.effort` | **需要**：模型条目配 `reasoning.variants` | **不需要** |
-| 其它模型，自定义档名（如 "turbo"） | 无原生表，留空 | 需要 | **需要**：补丁兜底合成 |
-| ZCode ≤ 3.8.1，任何模型任何档位 | 无原生表 | 需要 | **需要** |
-
-判别某次请求走的哪条路：`thinking:{type:"adaptive"} + output_config.effort` = 原生路径；`thinking:{type:"enabled", budget_tokens:N}` = 补丁兜底。补丁在原生表非空时惰性（`??` 短路），留着无害但升级后要重打才有意义。
-
-### 档位从配置到请求的完整链路（补丁原理）
-
-```
-~/.zcode/v2/config.json  模型条目 reasoning.variants      ← 档位名数组（UI 显示的就是它）
-      │  桌面端 host：variants → 内部 levels（每档参数对象）
-      │  内核 override 构建器 → catalogOverrides 注入模型目录
-      ▼
-capability.reasoning = { enabled, levels, providerOptionsByLevel }
-      │  内核档位解析函数 sD(3.8.1)/AD(3.9.1)/mN(3.11.2)(modelRef, 选中档名, catalog)
-      ▼
-{ level, providerOptions: providerOptionsByLevel[档名] }   ← 断点：自定义模型此表为空
-      │  合并进请求
-      ▼
-anthropic: thinking:{type:"enabled",budget_tokens:N} + effort
-openai 系: reasoning_effort:"档名"
-```
-
-`providerOptionsByLevel`（档名→请求参数表）只给内核认识的白名单家族（claude/glm/deepseek 等）下发；自定义模型拿到空表，档位能选中却不产生任何请求参数。补丁 = 在取参处加 `?? zCfgEffort(档名)` 兜底，按档名现场合成参数；白名单模型表非空，`??` 短路，行为零变化。
-
-### ox-alpha 白名单的代码依据（3.9.1+ 原生支持）
-
-- **(a) 硬编码白名单**：内核 override 构建函数 `t2t` 首分支 `t.reasoningProfile===Iue || j5(t.modelId)` → anthropic 协议拿 `jye()` = `{defaultLevel:"max", levels:["low","high","max"], providerOptionsByLevel:每档{effort, thinking:{type:"adaptive"}}}`。其中 `Iue=iLe([111,120,45,97,108,112,104,97])="ox-alpha"`，`j5` 注册名 `isOxAlphaReasoningModelId`（正则 `/ox-alpha/i` 子串匹配 + 两个内部预览模型）。与端点协议无关，同端点其它模型无此待遇。
-- **(b) 标准档名通用表**：非白名单模型配了 `reasoning.variants` 且档名为标准名，构建时也套通用表（anthropic → adaptive+effort）。config 里配的档位集合即 UI 显示的集合。
-
-### 工作流
-
-1. **配档位**（每模型一次，完全退出 ZCode 后改 `~/.zcode/v2/config.json`）：
-   ```json
-   "reasoning": {"enabled": true, "variants": ["low", "high", "max"], "defaultVariant": "max"}
-   ```
-   **关于 `"zcode": {"modified": true}`**（客户端内部的"用户已改过、目录同步别覆盖"豁免标记：内核做模型目录合并时，`modified===true || deleted===true` 的条目整体保留本地版本）：
-   - **走 UI 新增/编辑模型时客户端会自动盖章**——保存模型列表会重写整条 provider 的模型（3.11.2 实测：UI 里新增 deepseek-v4-pro 后，同 provider 的 deepseek-v4-flash 也一并被补上该标记）。UI 路径无需手动补。
-   - **手改 config.json 绕过了 UI，没有任何路径替你盖章**，需要豁免就手动补——并入现有 `zcode` 块（如 `"zcode": {"modalitiesConfigured": true, "modified": true}`），别整体替换，否则丢掉既有键。对参与目录同步的条目是刚需；对自建 provider 的模型目前是纯保险（没有同步会碰它们，实测不补也长期存活）。
-   - **手改更隐蔽的风险在 UI 保存**：保存 provider 的链路会先剥掉旧条目的 `variants`/`modified`/`contextWindow` 等（`omitModelCarryoverKeys`）再按表单状态重建——手改的 `reasoning.variants` 可能被一次 UI 保存吃掉（"档位退回开启/关闭开关"的另一条成因，与目录同步并列）。改完 config 后避免在 UI 里保存该 provider；保存过就回头确认档位仍在。
-2. **仅当需要补丁时**（见判断表）：`--check` → 打补丁 → 完全退出并重启 ZCode。新版本无已知锚点先 `--extract`。
-3. **验证**：rollout（`~/.zcode/cli/rollout/model-io-*.jsonl`）请求体里 `thinking`/`effort` 随档位变化；引擎日志（`~/.zcode/cli/log/`）无 400。**注意 rollout 请求体是脱敏的，`thinking` 字段会被剥掉（内置模型也一样），不能作为判据**——以 OpenRouter Dashboard → Activity Log 之类的外部请求日志为准。
-
-### 内核补丁点与版本匹配
-
-断点只有一处——内核 `resources/glm/zcode.cjs` 里的**思考档位解析函数**（见上方链路图）。zcode.cjs 是 esbuild 压缩产物，**每个版本的顶层符号名整体重排**，锚点（解析函数完整原文）必须与已安装版本逐字符一致：
-
-| 版本 | 已知符号 |
-|---|---|
-| 3.8.1 | sD / G_e / Fgo / gXe |
-| 3.9.1 | AD / Zye / fxo / utt |
-| 3.9.2 | RD / Xye / Sxo / ptt |
-| 3.11.2 | mN / k2e / CIo / _nt（本版返回处局部变量名为 s，替换逻辑已通用化） |
-
-脚本按「全文唯一匹配」自动选择版本：对每个已知锚点统计出现次数，**恰好有一版 =1 才动手**；全为 0 或多版命中都拒绝修改。锚点匹配失败 ≠ 补丁思路失效——要改的内核点（解析函数返回处 `providerOptionsByLevel?.[X]` 查表表达式）所有版本语义不变，变的只是符号名。
-
-**新版本锚点提取**：首选 `--extract` 自动提取——按结构特征（函数以 `{level:...providerOptionsByLevel?.[...]}:void 0}` 收尾、体内无嵌套 function）定位，已打补丁的文件自动回退 .bak 原始件，打印可直接粘贴进脚本 `ANCHORS` 字典的锚点（打印格式即条目格式，加个版本号键即可）。`--extract` 失败（候选数 ≠1）时人工提取：在内核里搜 `providerOptionsByLevel?.[`，找到以 `:void 0}` 收尾的完整解析函数整段复制为锚点；若函数体结构有变（不止符号改名），同步调整 `replacement_for()` 的拼接假设。加锚点后用 `--check` 验证恰好唯一命中再打。
-
-### 档名与预算映射（补丁内置）
-
-| 档名 | anthropic budget_tokens | openai 系 reasoning_effort |
-|---|---|---|
-| low | 4000 | low |
-| medium | 8000 | medium |
-| high | 16000 | high |
-| xhigh | 32000 | xhigh |
-| max | 32000 | max（**原名透传**，不折算成 xhigh） |
-| 其它任意名 | 16000 兜底 | 不带 |
-| disabled / none / off / nothink | thinking disabled | `reasoning_effort:"off"`（**不省略字段**） |
-
-改数值或加档名：编辑脚本 `HELPER` 里的映射行 `{low:4e3,medium:8e3,high:16e3,xhigh:32e3,max:32e3}[t]??16e3`，重打补丁。
-
-**openai 侧为何原名透传**（实测 workbuddy2api 网关联动得出）：智谱系网关的档位表是 low/high/max 且带 supported_efforts 自动降级——补丁若把 max 折算成 xhigh，网关会降级成 high（max 档丢失）；若「关闭」省略 reasoning_effort 字段，上游会落到默认档（glm-5.3 默认≈max，等于关不掉）。因此 openai 侧一律发原始档名：网关认识就透传，不认识自动降级/floor 到最近档（有日志）。注意「关闭」发 `off` 在"支持档全高于 off"的网关会被 floor 到最低档（如 low）而非真关闭——真关闭需要网关侧特判（如 workbuddy2api 正在加的 canDisableThinking 处理）；对官方 OpenAI 端点 `max`/`off` 是非法值会 400，此折中面向智谱系自定义网关生态。
-
-**输出上限约束**：anthropic 协议要求 `budget_tokens < max_tokens`，等值会被内核钳到 max-1。模型条目不写 `limit.output` 时请求不带 max_tokens，由网关兜默认值；若写了 `limit.output`，必须大于所选档位预算（如 output 32000 配 max 档 32000 会直接 400）。
-
-### deepseek 家族实测记录（3.11.2）
-
-- 内核 override 构建器（`gwt`）分支顺序：ox-alpha 白名单 → glm-5.3 → kimi-k3 → **config.reasoning（自定义档位在此生效）** → 家族兜底
-- 无自定义配置时 deepseek 走兜底 `CA()`：只有 enabled/disabled 两档开关、预算固定 1024
-- 配了 variants + 内核补丁后：deepseek-flash 实测 max 档下发 `budget_tokens:32000 + effort:"max"`（补丁兜底路径，与内置 1024 明显区分）
-
-### 故障排查
-
-| 现象 | 原因与处理 |
-|---|---|
-| 档位能选但请求无 thinking | 内核补丁没打或打完没重启；`--check` 确认（3.9.1+ 标准档名走原生，无补丁也应生效） |
-| 400: budget_tokens 必须小于 max_tokens | 所选档位预算 ≥ `limit.output`；调大上限或不设上限 |
-| 400: max_tokens 缺失 | 不设 output 上限且网关不兜默认时出现；给模型设较大的 `limit.output` |
-| 升级后失效 | 内核/app.asar 被覆盖；重跑补丁（无已知锚点先 `--extract`） |
-| 档位选不到某名字 | `variants` 里没写，或 `defaultVariant` 不在列表内 |
-| 档位配置丢失（退回"开启/关闭"开关） | 手改的 `reasoning` 被覆盖，两条成因：①目录同步——补 `zcode.modified: true` 豁免（UI 加的模型客户端会自动补）；②UI 保存 provider 时条目被重建、连带剥掉 `variants`——改完 config 别在 UI 里保存该 provider，保存过就回头确认档位仍在 |
 
 ## 二、打开统计图：用量页去截断
 

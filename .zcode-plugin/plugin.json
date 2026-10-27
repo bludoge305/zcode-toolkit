@@ -1,6 +1,6 @@
 {
   "name": "zcode-tokenspeed",
-  "version": "0.6.39",
+  "version": "0.6.40",
   "description": "ZCodium 桌面客户端全方位原生体验增强套件（ZCodium-toolkit fork，兼容原版 ZCode）：TPS 实时状态栏、思考强度悬浮滑条、提示词多模型智能润色、用量图表去截断、模型浮窗加宽与设置页模型拉取。内置客户端升级自动感知与无感自愈看护，全量幂等、安全可还原，支持按需逐项开关。",
   "author": {
     "name": "c80361619"
@@ -8,12 +8,6 @@
   "skills": "./skills",
   "commands": "./commands",
   "userConfig": {
-    "reasoning_config": {
-      "type": "boolean",
-      "title": "思考档位配置（3.14+）",
-      "description": "把各模型已配的档位写进 provider_config.json 的 optionSpecs.reasoningLevel，界面档位列表与请求体参数都由它下发。3.14 起用这个，不需要内核补丁；界面手动配置过的模型会自动跳过。默认开启；退出客户端时自动同步；关闭时为不托管状态（停止自动同步，不主动还原已有配置，避免与客户端回写冲突）。",
-      "default": true
-    },
     "usage_chart": {
       "type": "boolean",
       "title": "用量页去截断",
@@ -50,23 +44,11 @@
       "description": "输入框旁「增强提示词」按钮：一键把草稿改写得更清晰具体，支持「恢复原文」；在按钮上**右键**可按供应商分组选择用哪个模型润色（选中即持久化，零重启生效）。默认开启；需要改写 app.asar，会在你完全退出 ZCodium 时写入，下次启动可见。",
       "default": true
     },
-    "core_patch": {
-      "type": "boolean",
-      "title": "思考档位内核补丁（旧版专用）",
-      "description": "仅原版 ZCode 3.11.2 及更早版本需要。ZCodium 与 3.14.x 起的内核改为原生 optionSpecs 机制，本项会被自动识别并跳过（脚本提示「不适用」），不会误报成已生效。默认开启。",
-      "default": true
-    },
     "display_name": {
       "type": "string",
       "title": "界面显示名称",
       "description": "把界面左下角的显示名改成这里的名字（例如 Bludoge）。**留空 = 强制写回 ZCodium**（即使当前显示的是别的名字）。也可直接用 /zcode-patch-setdisplayname <名字> 设置，两者等价；不带参数执行该命令同样是写回 ZCodium。名字 1-40 字符，不能含引号、反引号、反斜杠或换行；长度变化时自动整包重建。",
       "default": ""
-    },
-    "window_id_fix": {
-      "type": "boolean",
-      "title": "窗口 ID 缺陷修复",
-      "description": "修 ZCodium 1.0.2 打包缺陷：disposeWindow(browserWindowId) 引用了未定义变量，关闭窗口时抛 ReferenceError。上游已修复的版本会自动识别为「无需处理」，不报失败。默认开启。",
-      "default": true
     }
   }
 }

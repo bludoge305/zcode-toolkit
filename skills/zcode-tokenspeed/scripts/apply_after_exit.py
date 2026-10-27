@@ -159,16 +159,13 @@ def resolve_install() -> tuple[Path | None, Path | None]:
 # 漏一个键的后果：`--want=<键>=on` 会被 parse_wants 当「未知开关」忽略，
 # 于是那个开关**开不起来也关不干净**（enhance_prompt 就漏过这一条）。
 PATCH_ARGS = {
-    "reasoning_config": ["--reasoning-config"],
     "usage_chart": ["--usage-chart"],
     "model_width": ["--model-width"],
     "tps_footer": ["--tps-footer"],
     "thought_slider": ["--thought-slider"],
     "enhance_prompt": ["--enhance-prompt"],
     "model_puller": ["--model-puller"],
-    "core_patch": [],
     "display_name": ["--display-name"],
-    "window_id_fix": ["--window-id-fix"],
 }
 # 未收到 --want 时的默认动作（本地计划任务用）：全量 7 项补丁按序全部应用
 DEFAULT_TASKS = [
@@ -223,12 +220,7 @@ def _save_wants(argv: list[str]) -> None:
             key, _, val = a[len("--want="):].partition("=")
             key = key.strip()
             if key in PATCH_ARGS:
-                parsed = _parse_want_value(key, val)
-                if key == "reasoning_config" and not parsed:
-                    # 思考档位配置关闭为"不托管"语义：绝不记录还原请求
-                    wants_dict.pop(key, None)
-                else:
-                    wants_dict[key] = parsed
+                wants_dict[key] = _parse_want_value(key, val)
     if wants_dict:
         try:
             import json
@@ -265,9 +257,6 @@ def parse_wants(argv: list[str]):
     tasks = []
     for key, value in merged_wants.items():
         enabled = bool(value)
-        if key == "reasoning_config" and not enabled:
-            # 思考档位配置关闭为"不托管"语义：绝不执行 revert，避免覆盖客户端文件并导致重启死循环
-            continue
         if key in STRING_KEYS:
             # 字符串型开关（display_name）：空值 = 无参语义 = **写回 ZCodium**，
             # 所以无论值有没有，都是「应用」而不是 revert。revert 仅用于精确撤销 sidecar。
@@ -284,9 +273,7 @@ def batch_tasks(tasks: list[tuple[list[str], bool]]) -> list[tuple[list[str], bo
       1. 先执行 revert（还原关闭的项），再执行 apply（应用开启的项）；
       2. 针对同一方向：
          - 拥有具体命令行参数的补丁（如 --tps-footer, --enhance-prompt 等）合并为单次批量调用，
-           参数保持既有顺序并去重；
-         - 空参数项（即 core_patch 思维强度内核补丁）保持独立调用（因为 zcode_patcher 在
-           接收 asar 标志时不会跑内核补丁）。
+           参数保持既有顺序并去重。
     """
     batched = []
     for target_revert in (True, False):
@@ -294,18 +281,12 @@ def batch_tasks(tasks: list[tuple[list[str], bool]]) -> list[tuple[list[str], bo
         if not subset:
             continue
         merged_args = []
-        has_core_patch = False
         for args in subset:
-            if not args:
-                has_core_patch = True
-            else:
-                for a in args:
-                    if a not in merged_args:
-                        merged_args.append(a)
+            for a in args:
+                if a not in merged_args:
+                    merged_args.append(a)
         if merged_args:
             batched.append((merged_args, target_revert))
-        if has_core_patch:
-            batched.append(([], target_revert))
     return batched
 
 
@@ -344,7 +325,7 @@ def main() -> int:
         pass
     _save_wants(sys.argv[1:])
 
-    # 预检：如果明确指定了需求但过滤后无待办任务（如仅 reasoning_config=off），直接退出
+    # 预检：如果明确指定了需求但过滤后无待办任务，直接退出
     early_tasks = parse_wants(sys.argv[1:])
     if early_tasks is not None and not early_tasks:
         log("没有待应用的补丁任务，看护退出，不进行等待与重启")

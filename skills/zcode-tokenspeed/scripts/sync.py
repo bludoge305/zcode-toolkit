@@ -76,21 +76,18 @@ CLIENT_FINGERPRINT = HERE / "_client_fingerprint.json"
 # 只查 tasklist 里有没有 `ZCode.exe`，与 target 无关；命中就直接 `return 2` 拒绝写入
 # （理由：app.asar 被锁、config.json / provider_config.json 会被客户端回写覆盖）。
 # 而 SessionStart 钩子**必然**在 ZCode 运行中触发，所以标 False 的三项
-# （reasoning_config / usage_chart / model_width）在钩子里永远写不进去 ——
+# （usage_chart / model_width 这类配置级补丁）在钩子里永远写不进去 ——
 # 早期版本就是这样：每次装完都报「未处理: xxx(执行失败)」。
 # 现在改成**先试立即写，被拒（refused）就自动转交 apply_after_exit.py**：
 # 桌面端场景退化成「退出时写入」，纯 CLI 场景（没有 ZCode.exe 在跑）仍能即时生效。
 PATCHES = [
-    ("reasoning_config", ["--reasoning-config"], False),   # 3.14+ 档位配置（配置侧原生）
     ("usage_chart", ["--usage-chart"], False),
     ("model_width", ["--model-width"], False),
     ("tps_footer", ["--tps-footer"], True),
     ("thought_slider", ["--thought-slider"], True),
     ("enhance_prompt", ["--enhance-prompt"], True),
     ("model_puller", ["--model-puller"], True),
-    ("core_patch", [], False),                             # ≤3.11 内核补丁
     ("display_name", ["--display-name"], True),            # 品牌名替换（重打包级）
-    ("window_id_fix", ["--window-id-fix"], True),          # 窗口 ID 缺陷修复（重打包级）
 ]
 
 #: 参数需要按「开关的当前值」动态拼装的补丁。
@@ -307,7 +304,7 @@ def read_options():
     # 宿主若把插件配置注入 hook 环境，优先用环境变量。
     # 键名必须 `.lower()` 归一：Windows 上 os.environ 会把键名**转成大写**
     # （CPython 对 nt 的实现就是「Env Var Names Must Be UPPERCASE」），
-    # 于是 ZCODE_PLUGIN_CONFIG_reasoning_config 读出来是 REASONING_CONFIG，
+    # 于是 ZCODE_PLUGIN_CONFIG_tps_footer 读出来是 TPS_FOOTER，
     # 与开关名对不上 → `merged = {**defaults, **explicit}` 里默认值（全 true）胜出，
     # 用户保存的开关会被**整体忽略**。
     env_opts = _coerce({key[len("ZCODE_PLUGIN_CONFIG_"):].lower(): val
@@ -497,8 +494,6 @@ def _want_token(value) -> str:
 
 def start_watchdog(wanted: dict) -> None:
     """启动退出后看护：等 ZCode 退出 → 应用重打包级补丁。"""
-    # 过滤掉 reasoning_config 关闭项（不托管语义，绝不调度看护）
-    wanted = {k: v for k, v in wanted.items() if not (k == "reasoning_config" and not v)}
     if not wanted:
         return
     shared = _shared_state_dir()
@@ -595,10 +590,6 @@ def run_sync(echo: bool = False) -> str:
         if key not in wanted:
             continue
         want = wanted[key]
-        if key == "reasoning_config" and not want:
-            # 「思考档位配置」关闭时语义为"不托管"：
-            # 不主动写入，绝不主动还原 provider_config.json（客户端会自行写回，还原注定失效且会触发看护无限重启死循环）。
-            continue
         # display_name 的 want 是「名字」而不是布尔：非空时拼成
         # `--display-name --name <名字>`；为空时只带 `--display-name`（= 写回 ZCodium）。
         args = patch_args(key, args, want)
