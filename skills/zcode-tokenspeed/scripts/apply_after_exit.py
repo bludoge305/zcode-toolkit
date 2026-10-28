@@ -36,13 +36,12 @@ LOG = HERE / "_apply_after_exit.log"
 # 并且抢先的那个把 pid 删掉、后一个误判「客户端已再次运行」而跳过重启。
 # 放到数据目录（与发行版无关的那个）后，全局只有一个看护能进入处理阶段。
 def _shared_state_dir() -> Path:
-    """跨副本共享的看护状态目录（优先客户端真实在用的数据目录）。"""
-    home = Path.home()
-    for name in (".zcode", ".zcodium"):
-        d = home / name
-        if (d / "v2").is_dir() or (d / "cli").is_dir():
-            return d
-    return home / ".zcode"
+    """跨副本共享的看护状态目录，固定 ~/.zcodium。
+
+    以前会遍历 .zcode / .zcodium 挑一个，但两者可能同时存在（~/.zcode 为空骨架时
+    也会被选中），看护状态就写进了不参与运行的那个目录。
+    """
+    return Path.home() / ".zcodium"
 
 
 SHARED_DIR = _shared_state_dir()

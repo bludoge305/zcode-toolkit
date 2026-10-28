@@ -2724,10 +2724,9 @@ class TestConsoleEncoding(unittest.TestCase):
         self.assertNotIn("UnicodeEncodeError", out, out[-600:])
         self.assertNotIn("Traceback", out, out[-600:])
         self.assertIn("执行汇总", out)
-        # 项数随补丁增减变化，用 ALL_PATCH_FLAGS 推导，避免每加一项就红一次。
-        # 现在 --all 只覆盖 asar 级补丁（与 ALL_PATCH_FLAGS 一一对应）。
-        expected = len(zp.ALL_PATCH_FLAGS)
-        self.assertIn(f"合计 {expected} 项", out)
+        # 项数 = 补丁数 × 探测到的安装数（本机可能同时存在 ZCodium 与原版 ZCode）。
+        # 用「合计」行存在 + 无失败来判定，避免把断言绑死在具体数量上。
+        self.assertRegex(out, r"合计 \d+ 项：成功 \d+，失败 0")
 
 
 class TestZcodeLogScan(unittest.TestCase):

@@ -1009,17 +1009,16 @@ def _models_main_block(ipc_alias: str) -> bytes:
 __H__.handle("zcode:read-model-config",async()=>{
 try{
 let{default:e}=await import("node:fs"),{default:t}=await import("node:path"),{default:n}=await import("node:os");
-// 数据目录名随发行版而异：原版 ZCode 用 ~/.zcode，ZCodium 用 ~/.zcodium。
-// 运行时按实际存在的那个选，两个客户端都能用（写死任一个都会让另一版读写空文件）。
-let base=n.homedir(),root="";
-for(let dn of [".zcode",".zcodium"]){
-let c=t.join(base,dn,"v2");
+let base=n.homedir(),root;
+// ★ 固定使用 .zcodium：本 fork 只服务 ZCodium 发行版。
+//   以前这里是 [".zcode",".zcodium"] 的探测循环，只要 .zcode/v2 目录存在就 break ——
+//   而本机 .zcode/v2 是个空骨架（providerRules: []），于是永远读到 0 个供应商，
+//   润色报「供应商缺少 API Key / Base URL」。写死更可靠，也少一次多余的文件探测。
+root=t.join(base,".zcodium","v2");
 try{
-let s=JSON.parse(e.readFileSync(t.join(c,"setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())c=t.join(s.dataBaseDir.trim(),dn,"v2");
+let s=JSON.parse(e.readFileSync(t.join(root,"setting.json"),"utf-8"));
+if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())root=t.join(s.dataBaseDir.trim(),".zcodium","v2");
 }catch(_){}
-try{if(e.existsSync(c)){root=c;break}}catch(_){}}
-if(!root)root=t.join(base,".zcode","v2");
 let cfg={provider:{}};
 try{let d=JSON.parse(e.readFileSync(t.join(root,"config.json"),"utf-8"));
 if(d&&typeof d=="object"&&!Array.isArray(d))cfg=d}catch(_){}
@@ -1080,15 +1079,16 @@ let targetPid=payload.targetPid||payload.__targetPid||t.__targetPid||null;
 let targetBaseUrl=payload.targetBaseUrl||payload.__targetBaseUrl||t.__targetBaseUrl||null;
 let{default:n}=await import("node:fs"),{default:r}=await import("node:path"),{default:i}=await import("node:os");
 // 同 read-model-config：按实际存在的发行版数据目录选根
-let base=i.homedir(),root="";
-for(let dn of [".zcode",".zcodium"]){
-let c=r.join(base,dn,"v2");
+let base=i.homedir(),root;
+// ★ 固定使用 .zcodium：本 fork 只服务 ZCodium 发行版。
+//   以前这里是 [".zcode",".zcodium"] 的探测循环，只要 .zcode/v2 目录存在就 break ——
+//   而本机 .zcode/v2 是个空骨架（providerRules: []），于是永远读到 0 个供应商，
+//   润色报「供应商缺少 API Key / Base URL」。写死更可靠，也少一次多余的文件探测。
+root=r.join(base,".zcodium","v2");
 try{
-let s=JSON.parse(n.readFileSync(r.join(c,"setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())c=r.join(s.dataBaseDir.trim(),dn,"v2");
+let s=JSON.parse(n.readFileSync(r.join(root,"setting.json"),"utf-8"));
+if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())root=r.join(s.dataBaseDir.trim(),".zcodium","v2");
 }catch(_){}
-try{if(n.existsSync(c)){root=c;break}}catch(_){}}
-if(!root)root=r.join(base,".zcode","v2");
 let o=r.join(root,"config.json");
 let pcPath=r.join(root,"provider_config.json");
 let pc={};
@@ -1294,15 +1294,16 @@ let{default:n}=await import("node:fs"),{default:r}=await import("node:path"),{de
 // 注意：主进程 bundle 是 ESM（package.json type=module），**没有 require**——
 // 取 Node 内置模块必须用动态 import（与 zcode:fetch-models-from-url 的写法保持一致）。
 let{default:httpsMod}=await import("node:https"),{default:httpMod}=await import("node:http");
-let base=i.homedir(),root="";
-for(let dn of [".zcode",".zcodium"]){
-let c=r.join(base,dn,"v2");
+let base=i.homedir(),root;
+// ★ 固定使用 .zcodium：本 fork 只服务 ZCodium 发行版。
+//   以前这里是 [".zcode",".zcodium"] 的探测循环，只要 .zcode/v2 目录存在就 break ——
+//   而本机 .zcode/v2 是个空骨架（providerRules: []），于是永远读到 0 个供应商，
+//   润色报「供应商缺少 API Key / Base URL」。写死更可靠，也少一次多余的文件探测。
+root=r.join(base,".zcodium","v2");
 try{
-let s=JSON.parse(n.readFileSync(r.join(c,"setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())c=r.join(s.dataBaseDir.trim(),dn,"v2");
+let s=JSON.parse(n.readFileSync(r.join(root,"setting.json"),"utf-8"));
+if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())root=r.join(s.dataBaseDir.trim(),".zcodium","v2");
 }catch(_){}
-try{if(n.existsSync(c)){root=c;break}}catch(_){}}
-if(!root)root=r.join(base,".zcode","v2");
 // ============================================================
 // 供应商凭据的唯一权威来源是 provider_config.json（客户端自己就是从这里发请求的）。
 // config.json 里的 provider.options 是**旧格式**：官方设置页现在写 provider_config.json，
@@ -1625,15 +1626,16 @@ _ENHANCE_SAVE_HANDLER = '''
 __H__.handle("zcode:enhance-model-save",async(ev,t)=>{
 try{
 let{default:n}=await import("node:fs"),{default:r}=await import("node:path"),{default:i}=await import("node:os");
-let base=i.homedir(),root="";
-for(let dn of [".zcode",".zcodium"]){
-let c=r.join(base,dn,"v2");
+let base=i.homedir(),root;
+// ★ 固定使用 .zcodium：本 fork 只服务 ZCodium 发行版。
+//   以前这里是 [".zcode",".zcodium"] 的探测循环，只要 .zcode/v2 目录存在就 break ——
+//   而本机 .zcode/v2 是个空骨架（providerRules: []），于是永远读到 0 个供应商，
+//   润色报「供应商缺少 API Key / Base URL」。写死更可靠，也少一次多余的文件探测。
+root=r.join(base,".zcodium","v2");
 try{
-let s=JSON.parse(n.readFileSync(r.join(c,"setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())c=r.join(s.dataBaseDir.trim(),dn,"v2");
+let s=JSON.parse(n.readFileSync(r.join(root,"setting.json"),"utf-8"));
+if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())root=r.join(s.dataBaseDir.trim(),".zcodium","v2");
 }catch(_){}
-try{if(n.existsSync(c)){root=c;break}}catch(_){}}
-if(!root)root=r.join(base,".zcode","v2");
 let f=r.join(root,"enhance_config.json");
 let cfg={};
 try{cfg=JSON.parse(n.readFileSync(f,"utf-8"))}catch(_){cfg={}}

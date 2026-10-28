@@ -11,6 +11,24 @@
 
 ## 本 fork 维护线（2026-10）
 
+### 0.6.41 — 修好润色报「供应商缺少 API Key / Base URL」
+
+**根因**：机器上同时存在 `~/.zcode/v2`（原版残留的空骨架，`providerRules: []`）
+与 `~/.zcodium/v2`（真实配置，3 个供应商）。四处注入代码用
+`for (dn of [".zcode", ".zcodium"])` 探测，只要 `.zcode/v2` **目录存在**就 `break`，
+于是永远读到空供应商表 → 无可用候选 → 报「供应商缺少 API Key / Base URL」。
+
+**修复**：数据根**固定 `.zcodium`**，不再探测。涉及：
+- 注入到客户端的三段 JS（enhance handler / models handler / enhance-save handler）
+- `enhance_doctor.py`、`sync.py`（CLI 配置与看护状态目录）、
+  `apply_after_exit.py`、`doctor.py`、`model_pull.py`
+
+顺带：`enhance_doctor` 的根定位不再按「目录存在」判断，避免同类假故障。
+
+验证：323 项测试全绿；`enhance_doctor` 在真实配置上解析出 WorkBuddy 供应商；
+注入代码经 `node --check` 语法校验通过。
+
+
 ### 0.6.40 — 移除三个不再适用的功能模块
 
 **移除**：思考档位配置（`--reasoning-config`）、思考等级内核补丁（无参执行）、

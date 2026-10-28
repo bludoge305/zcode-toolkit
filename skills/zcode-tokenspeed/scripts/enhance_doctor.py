@@ -58,26 +58,24 @@ TIMEOUT = 60000
 
 
 def resolve_root() -> tuple[Path, str]:
-    """复刻 handler：按实际存在的发行版数据目录（~/.zcode 或 ~/.zcodium）解析 v2 根。"""
+    """数据根固定为 ~/.zcodium/v2（本 fork 只服务 ZCodium 发行版）。
+
+    以前这里会遍历 ~/.zcode 与 ~/.zcodium 挑一个，但两者可能同时存在——
+    实测 ~/.zcode/v2 是个空骨架（providerRules: []），选中它就读到 0 个供应商，
+    诊断会报「没有可用模型」的假故障。写死更可靠，且与实际注入代码保持一致。
+    """
     home = Path(os.path.expanduser("~"))
-    for name in (".zcode", ".zcodium"):
-        cand = home / name / "v2"
-        sfile = cand / "setting.json"
-        try:
-            s = json.loads(sfile.read_text(encoding="utf-8"))
-            if isinstance(s, dict):
-                dbd = s.get("dataBaseDir")
-                if isinstance(dbd, str) and dbd.strip():
-                    alt = Path(dbd.strip()) / name / "v2"
-                    if alt.is_dir():
-                        return alt, f"setting.json dataBaseDir = {alt.parent}"
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
-        if cand.is_dir():
-            return cand, f"默认 (~/{name}/v2)"
-    return home / ".zcode" / "v2", "默认 (~/.zcode/v2)"
+    root = home / ".zcodium" / "v2"
+    try:
+        st = json.loads((root / "setting.json").read_text(encoding="utf-8"))
+        dbd = st.get("dataBaseDir") if isinstance(st, dict) else None
+        if isinstance(dbd, str) and dbd.strip():
+            alt = Path(dbd.strip()) / ".zcodium" / "v2"
+            if alt.is_dir():
+                return alt, f"setting.json dataBaseDir = {alt.parent}"
+    except Exception:
+        pass
+    return root, "固定 ~/.zcodium/v2"
 
 
 def _read_json(p: Path):

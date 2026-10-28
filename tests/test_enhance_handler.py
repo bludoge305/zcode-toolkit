@@ -170,7 +170,7 @@ class _Harness:
         script.write_text(self.preamble() + _build_runner(self.handler_src),
                           encoding="utf-8")
         env = dict(os.environ)
-        # handler 用 os.homedir() 定位 ~/.zcode/v2 —— 用 HOME/USERPROFILE 重定向到沙盒
+        # handler 用 os.homedir() 定位 ~/.zcodium/v2 —— 用 HOME/USERPROFILE 重定向到沙盒
         env["HOME"] = str(self.home)
         env["USERPROFILE"] = str(self.home)
         env["NODE_PATH"] = env.get("NODE_PATH", "")
@@ -197,7 +197,7 @@ class _Harness:
 
 
 class EnhanceHandlerTestBase(unittest.TestCase):
-    """搭一个假的 ~/.zcode/v2 环境 + 本地假供应商。"""
+    """搭一个假的 ~/.zcodium/v2 环境 + 本地假供应商。"""
 
     PROVIDER_OK = "prov-ok-0001"
     PROVIDER_DEAD = "prov-dead-0002"
@@ -206,7 +206,7 @@ class EnhanceHandlerTestBase(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="zenh-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.home = self.tmp / "home"
-        root = self.home / ".zcode" / "v2"
+        root = self.home / ".zcodium" / "v2"
         root.mkdir(parents=True, exist_ok=True)
         self.root = root
 

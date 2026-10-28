@@ -45,14 +45,12 @@ WATCHDOG = HERE / "apply_after_exit.py"
 
 
 def _find_cli_config() -> Path:
-    """定位宿主 CLI 配置：原版 ZCode 在 ~/.zcode/cli/config.json，
-    ZCodium 在 ~/.zcodium/cli/config.json。按存在与否选，都不在时退回原版路径。"""
-    home = Path.home()
-    for name in (".zcode", ".zcodium"):
-        p = home / name / "cli" / "config.json"
-        if p.is_file():
-            return p
-    return home / ".zcode" / "cli" / "config.json"
+    """宿主 CLI 配置，固定 ~/.zcodium/cli/config.json。
+
+    以前按存在与否在 .zcode / .zcodium 间挑，但空骨架的 ~/.zcode 也可能存在
+    并先被命中——那会把插件开关读到错误的文件上。
+    """
+    return Path.home() / ".zcodium" / "cli" / "config.json"
 
 
 CONFIG = _find_cli_config()
@@ -466,17 +464,12 @@ def run_patcher(args, revert: bool) -> str:
 
 
 def _shared_state_dir() -> Path:
-    """跨副本共享的看护状态目录（必须与 apply_after_exit 的同名函数保持一致）。
+    """跨副本共享的看护状态目录，固定 ~/.zcodium（与 apply_after_exit 同名函数一致）。
 
     挂在本脚本目录下会让「cache 安装副本」与「仓库副本」各持一把 pid 锁，
     互不互斥 → 客户端退出后两个看护同时重打包 asar，互相顶掉临时文件。
     """
-    home = Path.home()
-    for name in (".zcode", ".zcodium"):
-        d = home / name
-        if (d / "v2").is_dir() or (d / "cli").is_dir():
-            return d
-    return home / ".zcode"
+    return Path.home() / ".zcodium"
 
 
 def _want_token(value) -> str:

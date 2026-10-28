@@ -43,26 +43,24 @@ except ImportError:                    # 被别处 import 时脚本目录可能�
     from _console import bad_mark, glyph, ok_mark, safe_stdio
 
 def resolve_v2_root() -> Path:
-    """解析 v2 配置根目录：<数据目录>/v2。
+    """解析 v2 配置根目录，固定 ~/.zcodium/v2。
 
-    数据目录名随发行版而异（原版 ZCode 用 ~/.zcode，ZCodium 用 ~/.zcodium），
-    按实际存在的那个取；dataBaseDir 从该目录下的 setting.json 读出，
-    与客户端 bootstrap 同逻辑。"""
+    以前按发行版在 .zcode / .zcodium 间探测，但两者可能同时存在（.zcode 常是
+    原版残留的空骨架），选中它会把模型写进不参与运行的那份配置。
+    dataBaseDir 仍从该目录的 setting.json 读取，与客户端 bootstrap 同逻辑。
+    """
     base = Path.home()
-    for name in (".zcode", ".zcodium"):
-        cand = base / name / "v2"
-        try:
-            s = json.loads((cand / "setting.json").read_text(encoding="utf-8"))
-            dbd = s.get("dataBaseDir")
-            if isinstance(dbd, str) and dbd.strip():
-                alt = Path(dbd.strip()) / name / "v2"
-                if alt.is_dir():
-                    return alt
-        except Exception:
-            pass
-        if cand.is_dir():
-            return cand
-    return base / ".zcode" / "v2"
+    cand = base / ".zcodium" / "v2"
+    try:
+        s = json.loads((cand / "setting.json").read_text(encoding="utf-8"))
+        dbd = s.get("dataBaseDir")
+        if isinstance(dbd, str) and dbd.strip():
+            alt = Path(dbd.strip()) / ".zcodium" / "v2"
+            if alt.is_dir():
+                return alt
+    except Exception:
+        pass
+    return cand
 
 
 V2_ROOT = resolve_v2_root()

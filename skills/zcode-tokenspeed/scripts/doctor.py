@@ -90,25 +90,24 @@ def _load_patcher():
 
 
 def _storage_roots() -> list[Path]:
-    """客户端数据目录候选。
+    """客户端数据目录，固定 ~/.zcodium。
 
-    原版 ZCode 用 ~/.zcode，ZCodium 发行版用 ~/.zcodium；两个都列上、按存在与否取舍，
-    这样同一份自检在两个客户端上都能给出结论（只写死 .zcode 时 ZCodium 永远是「未安装」）。
+    以前会遍历 .zcode / .zcodium，但两者可能同时存在：~/.zcode 是原版残留的空骨架，
+    选了它自检就会报「插件未安装 / 配置读不到」的假故障。本 fork 只服务 ZCodium。
     """
     home = Path.home()
     roots: list[Path] = []
-    for name in (".zcode", ".zcodium"):
-        base = home / name
-        if base.is_dir():
-            roots.append(base)
-        cfg = _read_json(base / "cli" / "config.json")
-        d = ((cfg or {}).get("storage") or {}).get("dir") or ""
-        if isinstance(d, str) and d.strip():
-            p = Path(os.path.expanduser(d.strip()))
-            if p not in roots:
-                roots.append(p)
+    base = home / ".zcodium"
+    if base.is_dir():
+        roots.append(base)
+    cfg = _read_json(base / "cli" / "config.json")
+    d = ((cfg or {}).get("storage") or {}).get("dir") or ""
+    if isinstance(d, str) and d.strip():
+        p = Path(os.path.expanduser(d.strip()))
+        if p not in roots:
+            roots.append(p)
     if not roots:
-        roots.append(home / ".zcode")
+        roots.append(base)
     return roots
 
 
